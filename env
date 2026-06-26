@@ -1,0 +1,65 @@
+# Test Environment Configuration
+# This file provides test-specific settings for unit/integration tests
+# DO NOT use deployment-specific values here - only test values
+
+# LLM Configuration - Test Environment
+# Note: BASE_URL and API_KEY are in env-test-secrets
+CLOUD_DOG__EXPERT__LLM__PROVIDER=ollama
+CLOUD_DOG__EXPERT__LLM__MODEL=qwen3:14b
+CLOUD_DOG__EXPERT__LLM__TEMPERATURE=0.7
+CLOUD_DOG__EXPERT__LLM__MAX_TOKENS=1024
+CLOUD_DOG__EXPERT__LLM__TIMEOUT=300
+
+# Vector Store Configuration - Test Environment
+# Note: HOST and API_KEY are in env-test-secrets
+CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=qdrant
+CLOUD_DOG__EXPERT__VECTOR__STORES__QDRANT__DEFAULT__PORT=6333
+CLOUD_DOG__EXPERT__VECTOR__STORES__QDRANT__DEFAULT__COLLECTION_NAME=expert_agent_test
+
+# Redis Configuration - Test Environment
+# Note: HOST, PASSWORD, TOKEN, USERNAME are in env-test-secrets
+CLOUD_DOG__EXPERT__REDIS__PORT=6379
+CLOUD_DOG__EXPERT__REDIS__DB=1
+
+# Database Configuration - Test Environment
+CLOUD_DOG__EXPERT__DB__URI=sqlite:///test_expert.db
+CLOUD_DOG__EXPERT__DB__ECHO=false
+
+# API Server Configuration - Test Environment
+CLOUD_DOG__EXPERT__API_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__API_SERVER__PORT=18083
+CLOUD_DOG__EXPERT__API_SERVER__DEBUG=true
+
+# Web Server Configuration - Test Environment
+CLOUD_DOG__EXPERT__WEB_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__WEB_SERVER__PORT=18080
+
+# MCP Server Configuration - Test Environment
+CLOUD_DOG__EXPERT__MCP_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__MCP_SERVER__PORT=18081
+
+# A2A Server Configuration - Test Environment
+CLOUD_DOG__EXPERT__A2A_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__A2A_SERVER__PORT=18082
+
+# Logging Configuration - Test Environment
+CLOUD_DOG__EXPERT__LOG__LEVEL=DEBUG
+CLOUD_DOG__EXPERT__LOG__FORMAT_TYPE=text
+CLOUD_DOG__EXPERT__LOG__PII_REDACTION=true
+
+# ============================================================================
+# EXTERNAL SERVICE INTEGRATION (NO CREDENTIALS HERE)
+# All external endpoints, usernames, and secrets MUST live in private/env-*.
+# This file must remain free of external system credentials.
+# ============================================================================
+
+# Test User Configuration (generic, non-secret defaults)
+TEST_USER_USERNAME=testuser
+TEST_USER_EMAIL=testuser@example.com
+TEST_USER_PASSWORD=TestPassword123!
+
+# Test Group Configuration
+TEST_GROUP_NAME_PREFIX=test_group
+
+# Secrets must be stored in private/env-*-secrets only.
+

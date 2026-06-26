@@ -1,0 +1,601 @@
+# Default Configuration for Expert Agent MCP Server
+# This file provides the baseline configuration for all services
+
+# Global settings
+app:
+  name: "Expert Agent MCP Server"
+  version: "0.1.1RC1"
+  environment: "development"
+  url: "https://expert-agent.example.com"
+
+server_id: "${HOSTNAME:expert-agent-local}"
+
+# Database configuration
+db:
+  uri: "sqlite:///expert.db"
+  pool_size: 10
+  max_overflow: 20
+  echo: false
+
+# Default expert configuration
+default_expert: "_DEFAULT_"
+
+# Server configurations
+api_server:
+  host: "0.0.0.0"
+  port: 8083
+  base_path: "/v1"
+  debug: false
+  log_file: "/var/log/expert/api.log"
+  enabled: true
+
+web_server:
+  host: "0.0.0.0"
+  port: 8080
+  base_path: ""
+  debug: false
+  log_file: "/var/log/expert/web.log"
+  static_path: "./static"
+  template_path: "./templates"
+  enabled: true
+  max_concurrent_proxy: 5
+  # W28A-729-R5 flat-login demo roles. admin uses the bootstrap admin creds
+  # (CLOUD_DOG__EXPERT__WEB_SERVER__USERNAME/PASSWORD). read-write -> backend
+  # role "user"; read-only -> backend role "viewer". Seeded via the user-
+  # management path at API startup. Passwords resolve from these keys, else the
+  # in-code demo default, else CLOUD_DOG__EXPERT__WEB_SERVER__READ_WRITE_PASSWORD
+  # / __READ_ONLY_PASSWORD (no password literal committed here).
+  read_write_username: "read-write"
+  read_write_password: ""
+  read_only_username: "read-only"
+  read_only_password: ""
+
+mcp_server:
+  host: "0.0.0.0"
+  port: 8081
+  base_path: "/mcp"
+  debug: false
+  log_file: "/var/log/expert/mcp.log"
+  enabled: true
+  transport: "sse"
+
+a2a_server:
+  host: "0.0.0.0"
+  port: 8082
+  base_path: "/a2a"
+  debug: false
+  log_file: "/var/log/expert/a2a.log"
+  enabled: true
+
+# LLM default settings
+llm:
+  provider: "ollama"
+  base_url: "https://llm.example.com"
+  model: "qwen3:14b"
+  temperature: 0.7
+  top_k: 40
+  top_p: 0.9
+  max_tokens: 1024
+  timeout: 300
+  default_system_prompt: |
+    You are a helpful expert assistant. Provide accurate, concise, and context-appropriate responses. 
+    Use technical language when appropriate but ensure clarity for all users.
+  # Language-specific prompts
+  prompts:
+    en: |
+      You are a helpful expert assistant. Provide accurate, concise, and context-appropriate responses. 
+      Use technical language when appropriate but ensure clarity for all users.
+    fr: |
+      Vous êtes un assistant expert utile. Fournissez des réponses précises, concises et adaptées au contexte.
+      Utilisez un langage technique lorsque c'est approprié, mais assurez-vous de la clarté pour tous les utilisateurs.
+    pl: |
+      Jesteś pomocnym asystentem eksperckim. Zapewniaj dokładne, zwięzłe i odpowiednie do kontekstu odpowiedzi.
+      Używaj języka technicznego, gdy jest to odpowiednie, ale zapewnij jasność dla wszystkich użytkowników.
+
+# Prompt engineering controls (used for expert config validation + auto-prompt generation)
+prompts:
+  # Minimum description length to avoid empty/low-signal expert configs
+  min_description_chars: 30
+  # Minimum number of unique words in title+description (simple entropy proxy)
+  entropy_min_unique_words: 8
+  template_variables:
+    - "services"
+    - "tools"
+    - "sub_experts"
+    - "user"
+    - "session"
+
+service_composition:
+  tool_discovery_cache_ttl: 300
+  invocation_timeout: 30
+  circuit_breaker_threshold: 5
+  circuit_breaker_reset: 60
+  max_delegation_depth: 3
+  transactional_session_persist: false
+
+# Outbound cross-service credentials (EA6 / W28M-FIX-1616).
+# Keys are resolved at runtime by ServiceCompositionManager._resolve_credential
+# as service_credentials.<external_service_name>.api_key when the ExternalService
+# row carries no literal value. Real values are injected via
+# CLOUD_DOG__EXPERT__SERVICE_CREDENTIALS__<NAME>__API_KEY env vars bound to
+# ${vault.dev.services.<svc>.api_key} expressions — secrets stay in Vault, never
+# in defaults.yaml or the external_services table.
+service_credentials: {}
+
+# W28M-1605 agentic document-process chat-action interface.
+# Drives the W28M-1604 document-generation capability from one natural-language
+# instruction (the run_document_process A2A skill). Leaf keys are declared so the
+# CLOUD_DOG__EXPERT__DOCGEN__* env overrides are honoured at runtime.
+docgen:
+  # file-mcp storage profile for template read + document writes (canonical: google_drive).
+  storage_profile: "google_drive"
+  # empty -> capability uses the built-in assured-template Drive path.
+  template_path: ""
+  # empty -> capability uses the built-in DRIVE_OUT output directory.
+  output_dir: ""
+  # bounded section count for a synchronous chat-driven document.
+  chat_max_sections: 4
+  # empty -> capability uses the built-in internal-admin notification group.
+  admin_internal_group: ""
+  # default chat actor when an A2A caller does not declare one (validated against live IDAM).
+  default_chat_actor: "demo-docgen-user"
+
+# Dynamic research cycle (run_research_cycle) — web-grounded, self-pruning loop.
+research:
+  # UNAUTHENTICATED search-mcp-server /mcp endpoint for live search + crawl.
+  search_url: "https://searchmcp0.cloud-dog.net/mcp"
+  # file-mcp storage profile for the published daily brief (canonical: google_drive).
+  storage_profile: "google_drive"
+  # cap on the ranked source pool; on breach the lowest-ranked/oldest are retired
+  # (register row dropped + indexed content delete_by_filter'd).
+  max_sources: 50
+  # NEW sources crawled + ingested per run (bounds latency + politeness).
+  crawl_new_per_run: 4
+  # search results requested per topic query.
+  search_max_results: 6
+  # recency half-life (days) used in the source ranking blend.
+  recency_halflife_days: 30
+
+# W28M-1606 layered scheduled validated demo (run_research_document) — web-grounded
+# research source pool + full-depth W28M-1604 report.
+research_document:
+  # assured W28M-1604 template (Drive) used for full-depth section specs.
+  template_path: "/CloudDog-Demos/transparent-borders-report-generation/output/templates/transparent-borders-country-template-v1.json"
+  # depth baseline: generated word count must reach >=0.9x this (W28M-1604 exemplar).
+  example_words: 7285
+  # number of fresh web sources to crawl+ingest for grounding (more breadth than the brief path).
+  crawl_candidates: 8
+
+# code-runner A2A consumer (W28I-1218)
+# Analyst reasoning tool: send code-execution requests to the code-runner
+# service over A2A (POST <base_url>/a2a/tasks, skill_id=code.execute).
+# Secrets/hosts are injected via CLOUD_DOG__EXPERT__CODE_RUNNER__* env vars.
+# Defaults below are placeholders only — do NOT hardcode credentials here.
+code_runner:
+  base_url: ""
+  api_key: ""
+  timeout_seconds: 60
+  verify_tls: true
+  default_language: "python"
+
+# Embedding settings
+# Actual values are injected via CLOUD_DOG__EXPERT__EMBEDDINGS__* environment variables.
+# Defaults below are dev-mode placeholders only.
+embeddings:
+  provider: ""
+  model: ""
+  base_url: ""
+  dimension: 1024
+  batch_size: 10
+  timeout: 300
+  ollama:
+    base_url: ""
+    model: ""
+    timeout_seconds: 300
+
+# Session management
+session:
+  default_ttl_hours: 24
+  history_retention_days: 30
+  context_window_size: 32768
+  max_history_messages: 100
+  max_sessions_per_user: 10
+  max_sessions_per_group: 50
+  queue_enabled: true
+
+# Test settings
+test:
+  http_timeout_seconds: 60
+
+# Security settings
+auth:
+  provider: "local"
+  jwt_secret: "dev-only-placeholder-jwt-secret"
+  session_timeout_minutes: 60
+  password_min_length: 8
+  password_require_complexity: true
+  lockout_enabled: false
+  lockout_max_attempts: 5
+  lockout_window_seconds: 300
+  lockout_seconds: 300
+
+# Security settings (audit signing)
+security:
+  audit_secret_key: "dev-only-placeholder-audit-secret"
+
+# Redis defaults (queue/caching)
+redis:
+  host: "127.0.0.1"
+  port: 6379
+  db: 0
+  username: ""
+  password: ""
+  socket_connect_timeout_seconds: 10
+
+# Multimedia defaults
+multimedia:
+  storage_path: "storage/multimedia"
+  max_file_size_mb: 10
+  supported_formats:
+    - "jpg"
+    - "png"
+    - "mp3"
+    - "mp4"
+    - "txt"
+    - "md"
+
+# Logging configuration
+log:
+  level: "INFO"
+  format: "json"
+  dump_config: false
+  pii_redaction: true
+  log_folder: "./logs"
+  service_instance: "${HOSTNAME:expert-agent-local}"
+  api_server_log: "./logs/api_server.log"
+  web_server_log: "./logs/web_server.log"
+  mcp_server_log: "./logs/mcp_server.log"
+  a2a_server_log: "./logs/a2a_server.log"
+  audit_log: "logs/audit.log.jsonl"
+  environment: "${CLOUD_DOG_ENVIRONMENT:dev}"
+  retention:
+    hot_days: 14
+    cold_days: 60
+    archive_format: gz
+  integrity:
+    enabled: true
+    interval_seconds: 300
+    log_file: "logs/audit-integrity.log"
+    hash_algorithm: "sha256"
+  rotation:
+    mode: "size"
+    max_bytes: 10485760
+    backup_count: 10
+    when: "midnight"
+    interval: 1
+    compress: true
+
+# Privacy settings
+privacy:
+  pii_removal_enabled: true
+  pii_patterns:
+    - pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+      replacement: "[REDACTED_SSN]"
+      description: "Social Security Number"
+    - pattern: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+      replacement: "[REDACTED_EMAIL]"
+      description: "Email Address"
+    - pattern: "\\b\\d{3}[\\s.-]\\d{3}[\\s.-]\\d{4}\\b"
+      replacement: "[REDACTED_PHONE]"
+      description: "Phone Number"
+  data_encryption_at_rest: true
+  user_data_retention_days: 365
+
+# Reliability settings
+queue:
+  max_retries: 3
+  retry_delay_seconds: 5
+  timeout_seconds: 30
+  callback_timeout_seconds: 10
+  webhook_timeout_seconds: 10
+
+rate_limit:
+  requests_per_minute: 60
+  burst_limit: 10
+
+circuit:
+  hard_error_threshold: 5
+  soft_error_threshold: 3
+  reset_timeout_seconds: 60
+
+# Observability
+metrics:
+  enabled: true
+  prometheus_endpoint: "/metrics"
+  collection_interval_seconds: 30
+
+tracing:
+  enabled: false
+  provider: "jaeger"
+  endpoint: "http://localhost:14268/api/traces"
+
+# Default expert configurations
+experts:
+  _DEFAULT_:
+    name: "General Assistant"
+    title: "General Purpose Expert"
+    description: "A general purpose expert assistant for various tasks"
+    llm_provider: "ollama"
+    llm_model: "qwen3:14b"
+    llm_temperature: 0.7
+    llm_max_tokens: 1024
+    enabled: true
+    history_enabled: true
+    vector_store_enabled: true
+    tools_enabled: false
+    access_control:
+      public: false
+      allowed_groups: []
+      allowed_users: []
+
+# Default vector store configurations
+vector_stores:
+  # Common options applied to all vector stores
+  common:
+    indexing:
+      distance_metric: "cosine"  # l2 | cosine | dot | ip
+      index_type: "ann"  # exact | ann
+      ann_algorithm: "hnsw"  # hnsw | ivf | flat
+      compression_enabled: false
+      quantization_type: null  # scalar | product | binary
+      shards: 1
+      replicas: 0
+      persistence: true
+    search:
+      limit: 5
+      top_k: null  # Alias for limit
+      pre_filter: false  # Apply filter before vector search
+      offset: 0
+      score_threshold: null
+      min_score: null
+      max_distance: null
+      include_vectors: false
+      include_metadata: true
+      include_distances: true
+      include_scores: true
+      hybrid_enabled: false
+      hybrid_alpha: 0.5  # Weight between vector (1.0) and keyword (0.0)
+  
+  # Product-specific default options
+  chroma:
+    _DEFAULT_:
+      host: "localhost"
+      port: 8000
+      collection_name: "expert_default"
+      enabled: true
+      indexing:
+        distance_metric: "cosine"
+        index_type: "ann"
+        ann_algorithm: "hnsw"
+      options:
+        # HNSW collection metadata keys
+        hnsw_space: "cosine"  # l2 | cosine | ip
+        hnsw_construction_ef: 200
+        hnsw_M: 16
+        hnsw_search_ef: 50
+        hnsw_num_threads: 4
+        hnsw_resize_factor: 1.2
+        hnsw_batch_size: 100
+        hnsw_sync_threshold: 10000
+      search:
+        limit: 5
+        include: ["metadatas", "documents", "distances"]  # embeddings | metadatas | documents | distances
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+  
+  qdrant:
+    _DEFAULT_:
+      host: "localhost"
+      port: 6333
+      api_key: ""
+      collection_name: "expert_agent_default"
+      enabled: true
+      indexing:
+        distance_metric: "cosine"
+        index_type: "ann"
+        ann_algorithm: "hnsw"
+      options:
+        # HNSW config
+        hnsw_m: 16
+        hnsw_ef_construct: 200
+        hnsw_full_scan_threshold: 10000
+        hnsw_max_indexing_threads: 0  # 0 = auto
+        hnsw_on_disk: false
+        # Sharding + replication
+        shard_number: 1
+        sharding_method: "auto"  # auto | custom
+        replication_factor: 1
+        write_consistency_factor: 1
+        read_fan_out_factor: 1
+        # On-disk payload
+        on_disk_payload: false
+        # Quantization
+        quantization_enabled: false
+        quantization_type: "scalar"  # scalar | product | binary
+        quantization_always_ram: true
+      search:
+        limit: 5
+        with_payload: true
+        with_vector: false
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+  
+  opensearch:
+    _DEFAULT_:
+      host: "localhost"
+      port: 1201
+      username: ""
+      password: ""
+      collection_name: "expert_agent_default"
+      enabled: true
+      indexing:
+        distance_metric: "cosine"
+        index_type: "ann"
+        ann_algorithm: "hnsw"
+      options:
+        # knn_vector mapping
+        space_type: "cosinesimil"  # cosinesimil | l2 | innerproduct
+        method: "hnsw"  # hnsw | ivf
+        engine: "nmslib"  # lucene | faiss | nmslib
+        # HNSW parameters
+        ef_construction: 128
+        m: 24
+        ef_search: 100
+        # Index settings
+        index_knn: true
+        index_knn_algo_param_ef_search: 100
+      search:
+        limit: 5
+        k: null  # Alias for limit
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+  
+  weaviate:
+    _DEFAULT_:
+      url: "http://localhost:8080"
+      api_key: ""
+      collection_name: "expert_agent_default"
+      enabled: true
+      indexing:
+        distance_metric: "cosine"
+        index_type: "ann"
+        ann_algorithm: "hnsw"
+      options:
+        # Vector index type
+        vector_index_type: "hnsw"  # hnsw | flat | dynamic
+        # HNSW controls
+        ef_construction: 128
+        max_connections: 64
+        dynamic_ef_min: 100
+        dynamic_ef_max: 500
+        dynamic_ef_factor: 8
+        filter_strategy: "acorn"  # acorn | sweeping
+        flat_search_cutoff: 40000
+        vector_cache_max_objects: 1000000000
+      search:
+        limit: 5
+        alpha: 0.5  # Hybrid search weight
+        fusion_strategy: "ranked"  # ranked | relative
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+  
+  pgvector:
+    _DEFAULT_:
+      host: "localhost"
+      port: 5432
+      database: "expert_agent"
+      username: "postgres"
+      password: ""
+      collection_name: "expert_agent_default"
+      enabled: true
+      indexing:
+        distance_metric: "cosine"
+        index_type: "ivfflat"  # ivfflat | hnsw
+        ann_algorithm: "ivfflat"
+      options:
+        # IVFFlat parameters
+        ivfflat_lists: 100
+        ivfflat_probes: 10
+        # HNSW parameters
+        hnsw_m: 16
+        hnsw_ef_construction: 200
+        hnsw_ef_search: null
+        # Vector storage type
+        vector_type: "vector"  # vector | halfvec | bit
+        # Iterative scan
+        iterative_scan: false
+        max_probes: null
+        max_scan_tuples: null
+      search:
+        limit: 5
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+
+# Legacy vector_stores_config for backward compatibility
+vector_stores_config:
+  chroma:
+    _DEFAULT_:
+      host: "localhost"
+      port: 8000
+      collection_name: "expert_default"
+      enabled: true
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+  qdrant:
+    _DEFAULT_:
+      host: "localhost"
+      port: 6333
+      api_key: ""
+      collection_name: "expert_agent_default"
+      enabled: true
+      access_control:
+        read_groups: []
+        write_groups: []
+        read_users: []
+        write_users: []
+
+# Redis/Valkey Configuration
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  username: ""
+  password: ""
+  token: ""
+  ssl: false
+  socket_connect_timeout_seconds: 10
+  timeout: 5
+
+# Identity Provider Configurations
+auth_providers:
+  local:
+    enabled: true
+  google:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+  linkedin:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+  keycloak:
+    enabled: false
+    server_url: ""
+    realm: ""
+    client_id: ""
+    client_secret: ""
+
+# Platform cache (cloud_dog_cache)
+cache:
+  enabled: true
+  backend: "memory"
+  ttl_seconds: 3600
+  max_entries: 1000

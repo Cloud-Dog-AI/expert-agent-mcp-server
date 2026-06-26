@@ -1,0 +1,160 @@
+version: '3.8'
+
+services:
+  # Expert Agent API Server
+  api-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      network: host
+      args:
+        PYPI_URL: ${PYPI_URL:-}
+        PYPI_USERNAME: ${PYPI_USERNAME:-}
+        PYPI_PASSWORD: ${PYPI_PASSWORD:-}
+    network_mode: host
+    environment:
+      - CLOUD_DOG__EXPERT__DB__URI=sqlite:////var/lib/expert/expert.db
+      - CLOUD_DOG__EXPERT__LLM__BASE_URL=http://host.docker.internal:11434
+      - CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/var/lib/expert/chroma-data
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+      - CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+      - TEST_API_KEY=12345678
+      - CLOUD_DOG__EXPERT__API_SERVER__HOST=0.0.0.0
+      - CLOUD_DOG__EXPERT__API_SERVER__PORT=28083
+      - CLOUD_DOG__EXPERT__LOG__LEVEL=DEBUG
+      - EXPERT_ENV_FILE=/app/config/env-docker-it-server
+    volumes:
+      - ../logs:/var/log/expert
+      - ./database:/var/lib/expert
+      - ../config:/app/config
+    depends_on:
+      - vector-store
+    command: ["api"]
+
+  # Expert Agent MCP Server
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      network: host
+      args:
+        PYPI_URL: ${PYPI_URL:-}
+        PYPI_USERNAME: ${PYPI_USERNAME:-}
+        PYPI_PASSWORD: ${PYPI_PASSWORD:-}
+    network_mode: host
+    environment:
+      - CLOUD_DOG__EXPERT__DB__URI=sqlite:////var/lib/expert/expert.db
+      - CLOUD_DOG__EXPERT__LLM__BASE_URL=http://host.docker.internal:11434
+      - CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/var/lib/expert/chroma-data
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+      - CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+      - TEST_API_KEY=12345678
+      - CLOUD_DOG__EXPERT__MCP_SERVER__HOST=0.0.0.0
+      - CLOUD_DOG__EXPERT__MCP_SERVER__PORT=28081
+      - CLOUD_DOG__EXPERT__LOG__LEVEL=DEBUG
+      - EXPERT_ENV_FILE=/app/config/env-docker-it-server
+    volumes:
+      - ../logs:/var/log/expert
+      - ./database:/var/lib/expert
+      - ../config:/app/config
+    depends_on:
+      - api-server
+      - vector-store
+    command: ["mcp"]
+
+  # Expert Agent A2A Server
+  a2a-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      network: host
+      args:
+        PYPI_URL: ${PYPI_URL:-}
+        PYPI_USERNAME: ${PYPI_USERNAME:-}
+        PYPI_PASSWORD: ${PYPI_PASSWORD:-}
+    network_mode: host
+    environment:
+      - CLOUD_DOG__EXPERT__DB__URI=sqlite:////var/lib/expert/expert.db
+      - CLOUD_DOG__EXPERT__LLM__BASE_URL=http://host.docker.internal:11434
+      - CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/var/lib/expert/chroma-data
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+      - CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+      - TEST_API_KEY=12345678
+      - CLOUD_DOG__EXPERT__A2A_SERVER__HOST=0.0.0.0
+      - CLOUD_DOG__EXPERT__A2A_SERVER__PORT=28082
+      - CLOUD_DOG__EXPERT__LOG__LEVEL=DEBUG
+      - EXPERT_ENV_FILE=/app/config/env-docker-it-server
+    volumes:
+      - ../logs:/var/log/expert
+      - ./database:/var/lib/expert
+      - ../config:/app/config
+    depends_on:
+      - api-server
+      - vector-store
+    command: ["a2a"]
+
+  # Expert Agent Web UI Server
+  web-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      network: host
+      args:
+        PYPI_URL: ${PYPI_URL:-}
+        PYPI_USERNAME: ${PYPI_USERNAME:-}
+        PYPI_PASSWORD: ${PYPI_PASSWORD:-}
+    network_mode: host
+    environment:
+      - CLOUD_DOG__EXPERT__DB__URI=sqlite:////var/lib/expert/expert.db
+      - CLOUD_DOG__EXPERT__LLM__BASE_URL=http://host.docker.internal:11434
+      - CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/var/lib/expert/chroma-data
+      - CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+      - CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+      - TEST_API_KEY=12345678
+      - CLOUD_DOG__EXPERT__WEB_SERVER__HOST=0.0.0.0
+      - CLOUD_DOG__EXPERT__WEB_SERVER__PORT=28080
+      - CLOUD_DOG__EXPERT__LOG__LEVEL=DEBUG
+      - EXPERT_ENV_FILE=/app/config/env-docker-it-server
+    volumes:
+      - ../logs:/var/log/expert
+      - ./database:/var/lib/expert
+      - ../config:/app/config
+    depends_on:
+      - api-server
+      - vector-store
+    command: ["web"]
+
+  # Chroma Vector Store (for development)
+  vector-store:
+    image: chromadb/chroma:0.4.22
+    ports:
+      - "18000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - chroma-data:/chroma/chroma/
+    networks:
+      - expert-network
+
+  # Redis for queue management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - expert-network
+
+networks:
+  expert-network:
+    driver: bridge
+
+volumes:
+  chroma-data:
+  redis-data:

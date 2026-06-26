@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "expert-agent-mcp-server"
+version = "0.1.1RC1"
+description = "Expert Agent MCP Server backend services."
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Cloud-Dog, Viewdeck Engineering Limited" }
+]
+dependencies = [
+    # Platform packages
+    "cloud-dog-config>=0.3.1",
+    "cloud-dog-logging>=0.3.3",
+    "cloud-dog-api-kit==0.13.0",
+    "cloud-dog-idam>=0.5.2,<0.6",
+    "cloud-dog-llm>=0.2.1",
+    "cloud-dog-db>=0.1.0",
+    "cloud-dog-jobs>=0.3.0",
+    "cloud-dog-vdb>=0.5.0",
+    "cloud-dog-cache>=0.1.1",
+    "cloud-dog-storage>=0.1.1",
+    "cloud-dog-agent>=0.2.0",  # W28B-319 D5: optional prompt-engineering store delegation (lazy import)
+
+    # Existing runtime dependencies from requirements.txt
+    "fastapi>=0.68.0",
+    "uvicorn>=0.15.0",
+    "pydantic>=1.8.0",
+    "sqlalchemy>=1.4.0",
+    "alembic>=1.7.0",
+    "aiosqlite>=0.17.0",
+    "asyncpg>=0.25.0",
+    "psycopg2-binary>=2.9.0",
+    "pymysql>=1.0.0",
+    "aiomysql>=0.2.0",
+    "llama-index>=0.8.0",
+    "openai>=1.0.0",
+    "ollama>=0.1.0",
+    "chromadb>=0.4.0",
+    "weaviate-client>=3.0.0",
+    "qdrant-client>=1.0.0",
+    "elasticsearch>=8.0.0",
+    "opensearch-py>=2.0.0",
+    "pgvector>=0.1.0",
+    "python-jose>=3.3.0",
+    "PyJWT>=2.0.0",
+    "passlib>=1.7.0",
+    "bcrypt>=3.2.0",
+    "python-multipart>=0.0.5",
+    "cryptography>=46.0.0",
+    "jinja2>=3.0.0",
+    "starlette>=0.14.0",
+    "beautifulsoup4>=4.12.0",
+    "redis>=4.0.0",
+    "asyncio-mqtt>=0.10.0",
+    "prometheus-client>=0.11.0",
+    "prometheus-fastapi-instrumentator>=5.0.0",
+    "structlog>=21.0.0",
+    "pyyaml>=5.4.0",
+    "python-dotenv>=0.19.0",
+    "requests>=2.25.0",
+    "httpx>=0.23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.2.0",
+    "pytest-asyncio>=0.15.0",
+    "pytest-cov>=2.12.0",
+    "pytest-timeout>=2.1.0",
+    "selenium>=4.0.0",
+    "playwright>=1.50.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+]
+
+[tool.pytest.ini_options]
+addopts = "-p no:cloud_dog_config"
+asyncio_mode = "auto"
+markers = [
+    "llm: requires live LLM endpoint (Ollama/OpenRouter)",
+    "vdb: requires vector database (Chroma/Qdrant/OpenSearch)",
+    "db: requires relational database (MySQL/PostgreSQL)",
+    "smtp: requires SMTP/IMAP service",
+    "mcp: requires external MCP server(s)",
+    "docker: requires Docker build/run",
+    "pure: no external dependencies",
+    "fast: completes in <10 seconds",
+    "slow: takes 10-120 seconds",
+    "heavy: takes >120 seconds",
+    "quality: QT tier",
+    "unit: UT tier",
+    "system: ST tier",
+    "integration: IT tier",
+    "application: AT tier",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "cloud_dog_db"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/**",
+    "cloud_dog_db/**",
+    "defaults.yaml",
+    "README.md",
+]
+
+[project.urls]
+"Source" = "https://github.com/cloud-dog-ai/expert-agent-mcp-server"

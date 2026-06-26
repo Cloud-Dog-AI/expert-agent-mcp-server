@@ -1,0 +1,94 @@
+# Files/paths that MUST NOT reach the public mirror (PS-97 §1.1.2).
+# Internal operations, methods/IP, and topology stay internal-only.
+
+# Internal operations / methods / IP docs
+AGENT-LESSONS.md
+RULES.md
+CONTEXT-SUMMARY.md
+docs/AGENT_RULES.md
+
+# Internal deploy / preprod / build docs (reference internal hosts / env-vault / registry)
+docs/PREPROD.md
+docs/DEPLOY-INTERNAL.md
+docs/DEPLOY.md
+docs/BUILD.md
+docs/DOCKER.md
+
+# Local runtime state (absolute local paths, private env references)
+.run/
+
+# Internal test env files and private/working trees
+tests/env-*
+private/
+working/
+
+# This exclude list itself
+.publish-exclude
+# === W28A-861-R10 publication-shape readiness (append-only) ===
+# Internal ops / methods / IP docs (carry preprod/terraform/vault/internal-host references)
+RULES.md
+AGENT-LESSONS.md
+CONTEXT-SUMMARY.md
+EXTERNAL-BUILD.md
+BUILD.md
+docs/DEPLOY.md
+docs/DEPLOY-INTERNAL.md
+docs/PREPROD.md
+docs/ENV-REFERENCE.md
+docs/REQ-COVERAGE.md
+docs/REQUIREMENTS.md
+docs/TESTS.md
+docs/ROLES-AND-USECASES.md
+docs/SCOPE-MAP.md
+docs/BUILD.md
+docs/USAGE.md
+docs/API-REFERENCE.md
+docs/MCP-FORWARDING.md
+docs/PARAMETERS.md
+docs/AGENT_RULES.md
+docs/DOCKER.md
+docs/LLM-TEST-RESULTS.md
+docs/WARRANTY-1.0RC01.md
+docs/CROSS-PROJECT-AT-PREREQUISITES.md
+docs/archive/
+docs/INFRASTRUCTURE.md
+REQUIREMENTS.md
+# Internal lockfiles (pin internal index URLs)
+requirements.lock
+requirements.lock.EXCEPTION.md
+# Internal build variants / compose / pip config (public build uses Dockerfile.public)
+Dockerfile.dev
+docker/docker-compose.yml
+docker-compose.local-docker.yml
+docker-compose.local-host.yml
+docker-compose.override.yml
+docker/docker-compose.override.yml
+pip.conf.docker
+# Internal / preprod env examples (carry internal FQDNs / vault refs)
+env-docker-example
+env-example
+env.example
+docker-env.internal.example
+docker-env.public.example
+docker-env.local
+docker-env.example
+.env.example
+# Internal-only scripts (env-vault / /opt/iac / verify-preprod)
+scripts/validate-vault.sh
+scripts/verify_thread_b_t0_t3_preprod.py
+local-docker-server.sh
+# Test trees carry internal hosts / env-vault / preprod references; not part of the public build/run path
+tests/
+# Vendored build artefacts (re-generated at build time; not part of the public source mirror)
+vendor/
+# Committed lane evidence + retired artefacts (root-anchored; nested src subpackages survive)
+evidence/
+/archive/
+# Built UI bundle is a build artefact (regenerated from monorepo source at build time);
+# the public source mirror ships ui/README.md instead of the vendored dist.
+ui/dist/
+# Placeholder runtime dirs (created at runtime; .gitkeep placeholders are not publication material)
+config/.gitkeep
+prompts/
+test-storage/
+.run/

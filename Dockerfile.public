@@ -1,0 +1,98 @@
+# syntax=docker/dockerfile:1
+# expert-agent-mcp-server — Dockerfile.public (PS-97 v1.1 §1.1.3)
+#
+# PUBLIC variant — for external / GitHub-boundary builds (e.g. ghcr.io, Docker Hub).
+# Uses the active package index supplied by the build environment (PIP_INDEX_URL),
+# defaulting to the public PyPI. No internal Cloud-Dog host is hardcoded here.
+#
+# Development / internal CI builds keep using the existing ./Dockerfile, which is
+# fed the internal package index + CA inputs by scripts/docker-build.sh.
+#
+# Select via: docker-build.sh --variant public
+#
+# NOTE: platform packages (cloud-dog-config, cloud-dog-logging, cloud-dog-api-kit,
+# cloud-dog-idam, cloud-dog-llm, cloud-dog-db, cloud-dog-jobs, cloud-dog-vdb,
+# cloud-dog-cache, cloud-dog-storage) MUST be published to the active public index
+# (e.g. pypi.org / GitHub Packages, or built from GitHub-mirrored source) before
+# this Dockerfile can build successfully end-to-end. That publish step is tracked
+# separately as W28A-F3x-APPLY. Per PS-97 §3.3 / §4 this Dockerfile uses a single
+# index and NEVER an --extra-index-url.
+
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.vendor="Cloud-Dog, Viewdeck Engineering Limited"
+LABEL org.opencontainers.image.source="https://github.com/cloud-dog-ai/expert-agent-mcp-server"
+
+WORKDIR /app
+
+# Active package index — supplied by the build environment. Defaults to the public
+# PyPI. PS-97 §3.3: single --index-url, no --extra-index-url.
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+
+# Proxy args (transparent proxy environments may still inspect these).
+ARG HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} https_proxy=${https_proxy} no_proxy=${no_proxy}
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Public runtime CA bundle — the stock python:3.12-slim ca-certificates store is
+# sufficient for public package indexes and ACME-issued endpoints. No private CA.
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
+# Optional browser runtime for Selenium-driven test suites. Disabled by default.
+ARG INCLUDE_BROWSER_TOOLS=0
+
+# Install system dependencies.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        netcat-openbsd \
+        curl \
+        procps \
+    && if [ "$INCLUDE_BROWSER_TOOLS" = "1" ]; then \
+        apt-get install -y --no-install-recommends chromium chromium-driver; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to leverage Docker cache.
+COPY requirements.txt .
+
+# Install Python dependencies from the active public index only.
+# Platform packages are pinned in requirements.txt (cloud_dog_*).
+RUN PIP_NO_INPUT=1 pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.txt
+
+# Copy application code.
+COPY . .
+COPY database/migrations /app/migrations
+
+# The PS-30 web UI is staged into ui/dist before image build (publication exports
+# ship ui/dist; they do not have access to the sibling UI monorepo).
+RUN test -f /app/ui/dist/index.html
+
+# Create directories for logs and database.
+RUN mkdir -p /var/log/expert \
+    && mkdir -p /var/lib/expert
+
+# Expose service ports (defaults.yaml: web 8080, mcp 8081, a2a 8082, api 8083).
+EXPOSE 8080 8081 8082 8083
+
+# Create a non-root user.
+RUN adduser --disabled-password --gecos '' expertuser
+RUN chown -R expertuser:expertuser /app /var/log/expert /var/lib/expert
+USER expertuser
+
+RUN chmod +x /app/server_control.sh /app/docker-entrypoint.sh /app/healthcheck.sh
+
+# Health check — timeout must exceed the sum of all curl probes in healthcheck.sh.
+HEALTHCHECK --interval=30s --timeout=45s --start-period=90s --retries=5 \
+    CMD /app/healthcheck.sh
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["all"]

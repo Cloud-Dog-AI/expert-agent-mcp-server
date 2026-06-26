@@ -1,0 +1,59 @@
+# Single-container Docker env example for Expert Agent MCP Server.
+# NOTE: keep this file aligned with docker-env.example.
+# Intended for: docker run --network=host --env-file ./env-docker-example ...
+# Do not commit real credentials; copy to private/env-docker-local and fill values.
+
+# docker-run-single.sh sets EXPERT_ENV_FILE and mounts the file into the container.
+# Do not rely on implicit defaults for runtime config; provide an explicit env file.
+
+# Core server ports/hosts (host network mode)
+CLOUD_DOG__EXPERT__API_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__API_SERVER__PORT=18083
+CLOUD_DOG__EXPERT__WEB_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__WEB_SERVER__PORT=18080
+CLOUD_DOG__EXPERT__MCP_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__MCP_SERVER__PORT=18081
+CLOUD_DOG__EXPERT__MCP_SERVER__TRANSPORT=sse
+CLOUD_DOG__EXPERT__A2A_SERVER__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__A2A_SERVER__PORT=18082
+
+# LLM baseline (ollama-compatible endpoint on llm2)
+CLOUD_DOG__EXPERT__LLM__PROVIDER=ollama
+CLOUD_DOG__EXPERT__LLM__BASE_URL=https://llm.example.com
+CLOUD_DOG__EXPERT__LLM__MODEL=qwen3:14b
+
+# Embeddings baseline
+CLOUD_DOG__EXPERT__EMBEDDINGS__PROVIDER=ollama
+CLOUD_DOG__EXPERT__EMBEDDINGS__BASE_URL=https://llm.example.com
+CLOUD_DOG__EXPERT__EMBEDDINGS__MODEL=bge-m3:567m
+CLOUD_DOG__EXPERT__EMBEDDINGS__DIMENSION=1024
+
+# MariaDB primary DB URI MUST be provided via the paired secrets file:
+#   ./private/<env>-secrets
+# Example key to set in secrets (value omitted here by RULES.md):
+#   CLOUD_DOG__EXPERT__DB__URI=...
+CLOUD_DOG__EXPERT__DB__ECHO=false
+
+# Local Chroma persisted to mounted volume
+CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/app/storage/chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___COLLECTION_NAME=expert_agent_local_chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+
+# Redis (optional if remote queue is used)
+CLOUD_DOG__EXPERT__REDIS__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__REDIS__PORT=6379
+CLOUD_DOG__EXPERT__REDIS__DB=0
+
+# Test credentials used by smoke checks
+CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+CLOUD_DOG__EXPERT__TEST__USER__USERNAME=testuser
+CLOUD_DOG__EXPERT__TEST__USER__EMAIL=testuser@example.com
+CLOUD_DOG__EXPERT__TEST__USER__PASSWORD=TestPassword123!
+
+# Logging
+CLOUD_DOG__EXPERT__LOG__LEVEL=INFO
+
+# Optional remote/bridge-network override pattern:
+# NETWORK_MODE=bridge API_PORT=28083 WEB_PORT=28080 MCP_PORT=28081 A2A_PORT=28082 \
+#   ./scripts/docker-run-single.sh private/env-docker-local all

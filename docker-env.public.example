@@ -1,0 +1,76 @@
+# expert-agent-mcp-server — Docker Environment (PS-97 v1.1 §1.1.4 PUBLIC variant)
+#
+# PUBLIC variant — for external / GitHub-boundary deployments.
+# Uses *.example.com placeholders with <your-...-here> tokens.
+# NO secrets, NO internal Cloud-Dog hostnames.
+#
+# Copy to .env and fill in real endpoints + secrets before running.
+# Config precedence: OS environment -> this env file -> defaults.yaml.
+
+# ── Server Ports / Hosts (single-container mode runs all four servers) ──
+# defaults.yaml assignment: web 8080, mcp 8081, a2a 8082, api 8083.
+CLOUD_DOG__EXPERT__API_SERVER__HOST=0.0.0.0
+CLOUD_DOG__EXPERT__API_SERVER__PORT=8083
+CLOUD_DOG__EXPERT__WEB_SERVER__HOST=0.0.0.0
+CLOUD_DOG__EXPERT__WEB_SERVER__PORT=8080
+CLOUD_DOG__EXPERT__MCP_SERVER__HOST=0.0.0.0
+CLOUD_DOG__EXPERT__MCP_SERVER__PORT=8081
+CLOUD_DOG__EXPERT__MCP_SERVER__TRANSPORT=sse
+CLOUD_DOG__EXPERT__A2A_SERVER__HOST=0.0.0.0
+CLOUD_DOG__EXPERT__A2A_SERVER__PORT=8082
+
+# ── Authentication ─────────────────────────────────────────────────
+# Supply real values from your own secret store before running.
+CLOUD_DOG__EXPERT__API_KEY=<your-api-key-here>
+CLOUD_DOG__EXPERT__AUTH__PROVIDER=local
+CLOUD_DOG__EXPERT__AUTH__JWT_SECRET=<your-jwt-secret-here>
+
+# ── Database ───────────────────────────────────────────────────────
+# Default is local SQLite. For a server database supply your own URI, e.g.:
+#   CLOUD_DOG__EXPERT__DB__URI=postgresql://user:password@db.example.com:5432/expert
+#   CLOUD_DOG__EXPERT__DB__URI=mysql://user:password@db.example.com:3306/expert
+CLOUD_DOG__EXPERT__DB__URI=sqlite:///expert.db
+CLOUD_DOG__EXPERT__DB__ECHO=false
+
+# ── LLM (OpenAI-/Ollama-compatible endpoint) ───────────────────────
+CLOUD_DOG__EXPERT__LLM__PROVIDER=ollama
+CLOUD_DOG__EXPERT__LLM__BASE_URL=https://llm.example.com
+CLOUD_DOG__EXPERT__LLM__MODEL=qwen3:14b
+CLOUD_DOG__EXPERT__LLM__TIMEOUT=300
+
+# ── Embeddings ─────────────────────────────────────────────────────
+CLOUD_DOG__EXPERT__EMBEDDINGS__PROVIDER=ollama
+CLOUD_DOG__EXPERT__EMBEDDINGS__BASE_URL=https://llm.example.com
+CLOUD_DOG__EXPERT__EMBEDDINGS__MODEL=bge-m3:567m
+CLOUD_DOG__EXPERT__EMBEDDINGS__DIMENSION=1024
+
+# ── Vector Store (local Chroma persisted to a mounted volume) ───────
+CLOUD_DOG__EXPERT__VECTOR__STORE__TYPE=chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___PATH=/app/storage/chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___COLLECTION_NAME=expert_agent_local_chroma
+CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__CHROMA___DEFAULT___ENABLED=true
+
+# ── Redis (optional — only if a remote queue/cache is used) ─────────
+CLOUD_DOG__EXPERT__REDIS__HOST=127.0.0.1
+CLOUD_DOG__EXPERT__REDIS__PORT=6379
+CLOUD_DOG__EXPERT__REDIS__DB=0
+
+# ── Session controls ───────────────────────────────────────────────
+CLOUD_DOG__EXPERT__SESSION__DEFAULT_TTL_HOURS=24
+CLOUD_DOG__EXPERT__SESSION__HISTORY_RETENTION_DAYS=30
+CLOUD_DOG__EXPERT__SESSION__MAX_SESSIONS_PER_USER=10
+CLOUD_DOG__EXPERT__SESSION__MAX_SESSIONS_PER_GROUP=50
+CLOUD_DOG__EXPERT__SESSION__QUEUE_ENABLED=true
+
+# ── Logging ────────────────────────────────────────────────────────
+CLOUD_DOG__EXPERT__LOG__LEVEL=INFO
+CLOUD_DOG__EXPERT__LOG__PII_REDACTION=true
+
+# ── Corporate Proxy (optional) ─────────────────────────────────────
+HTTP_PROXY=
+HTTPS_PROXY=
+NO_PROXY=127.0.0.1,localhost,.example.com
+
+# ── TLS (optional) ─────────────────────────────────────────────────
+# Provide an additional CA bundle at runtime if your deployment needs it:
+# EXPERT_CA_BUNDLE=/app/certs/ca-bundle.crt

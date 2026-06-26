@@ -1,0 +1,2614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expert Agent MCP Server - Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --border: #30363d;
+            --accent: #58a6ff;
+            --success: #3fb950;
+            --warning: #d29922;
+            --error: #f85149;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+        .navbar {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .nav-brand { font-size: 18px; font-weight: bold; }
+        .nav-items {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+        .nav-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: background 0.2s;
+            font-size: 14px;
+        }
+        .nav-item:hover { background: var(--bg-tertiary); }
+        .nav-item.active { background: var(--accent); color: white; }
+        .main-container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .panel {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .panel.active { display: block; }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+        .panel-header h2 { font-size: 24px; }
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.8; }
+        .btn-small {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        input, textarea, select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 100%;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+        }
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-active { background: var(--success); color: white; }
+        .status-pending { background: var(--warning); color: white; }
+        .status-error { background: var(--error); color: white; }
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 600px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: var(--bg-primary);
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 12px;
+            border-radius: 8px;
+            max-width: 80%;
+        }
+        .message.user {
+            background: var(--accent);
+            color: white;
+            margin-left: auto;
+        }
+        .message.assistant {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+            padding: 15px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+        .chat-input-area textarea {
+            flex: 1;
+            min-height: 60px;
+            resize: vertical;
+        }
+        .loading { opacity: 0.6; pointer-events: none; }
+        .error { color: var(--error); margin-top: 10px; }
+        .success { color: var(--success); margin-top: 10px; }
+        .auth-gate {
+            max-width: 420px;
+            margin: 48px auto 0 auto;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .auth-actions {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+        }
+        .inline-form {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: var(--bg-primary);
+        }
+        .inline-form .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .inline-form .row > * {
+            flex: 1;
+            min-width: 180px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🤖 Expert Agent</div>
+        <div class="nav-items">
+            <div class="nav-item active" onclick="switchPanel('chat', this)">💬 Chat</div>
+            <div class="nav-item" onclick="switchPanel('channels', this)">📡 Channels</div>
+            <div class="nav-item" onclick="switchPanel('experts', this)">🎓 Experts</div>
+            <div class="nav-item" onclick="switchPanel('jobs', this)">⚙️ Jobs</div>
+            <div class="nav-item" onclick="switchPanel('knowledge', this)">📚 Knowledge</div>
+            <div class="nav-item" onclick="switchPanel('users', this)">👥 Users</div>
+            <div class="nav-item" onclick="switchPanel('groups', this)">👨‍👩‍👧‍👦 Groups</div>
+            <div class="nav-item" onclick="switchPanel('files', this)">📁 Files</div>
+            <div class="nav-item" onclick="switchPanel('prompts', this)">✏️ Prompts</div>
+            <div class="nav-item" onclick="switchPanel('testing', this)">🧪 Testing</div>
+            <div class="nav-item" onclick="switchPanel('admin', this)">⚙️ Admin</div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-secondary);">
+            <span id="apiStatus">●</span> API
+        </div>
+        <div class="auth-actions">
+            <span id="authUser" style="font-size: 12px; color: var(--text-secondary);">Not signed in</span>
+            <button id="logoutBtn" class="btn-small" style="display: none;" onclick="logoutWebUser()">Logout</button>
+        </div>
+    </nav>
+
+    <div id="authGate" class="auth-gate">
+        <h2 style="margin-bottom: 12px;">Web Login</h2>
+        <p style="margin-bottom: 16px; color: var(--text-secondary);">Use username/password. API keys stay server-side.</p>
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="loginUsername" placeholder="Username">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="loginPassword" placeholder="Password">
+        </div>
+        <button class="btn" onclick="loginWebUser()">Sign In</button>
+        <div id="loginError" class="error"></div>
+    </div>
+
+    <div id="appMain" class="main-container" style="display: none;">
+        <!-- Chat Panel -->
+        <div id="panelChat" class="panel active">
+            <div class="panel-header">
+                <h2>Chat Interface</h2>
+                <div>
+                    <select id="channelSelect" style="width: 200px; margin-right: 10px;">
+                        <option value="">Select Channel...</option>
+                    </select>
+                    <select id="sessionSelect" style="width: 260px;" onchange="onSessionSelectionChanged()">
+                        <option value="">New Session</option>
+                    </select>
+                    <button class="btn-small" onclick="loadSessionsForChannel()">Refresh Sessions</button>
+                    <button class="btn-small" onclick="deleteCurrentSession()">Delete Session</button>
+                </div>
+            </div>
+            <div class="chat-container">
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-area">
+                    <textarea id="chatInput" placeholder="Type your message..."></textarea>
+                    <button class="btn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Channels Panel -->
+        <div id="panelChannels" class="panel">
+            <div class="panel-header">
+                <h2>Channels</h2>
+                <button class="btn" onclick="showCreateChannel()">+ Create Channel</button>
+            </div>
+            <div id="createChannelForm" class="inline-form" style="display:none;">
+                <div class="row">
+                    <input type="text" id="createChannelName" placeholder="Channel name">
+                    <input type="text" id="createChannelDescription" placeholder="Description">
+                    <select id="createChannelExpertId"></select>
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="channelCreateSubmit" class="btn" onclick="createChannelFromForm()">Create Channel</button>
+                    <button id="channelCreateCancel" class="btn-small" onclick="cancelCreateChannel()">Cancel</button>
+                </div>
+            </div>
+            <div id="channelFormResult" style="margin-bottom: 12px;"></div>
+            <div id="channelHistoryResult" style="margin-bottom: 12px;"></div>
+            <div id="channelsList">Loading...</div>
+        </div>
+
+        <!-- Experts Panel -->
+        <div id="panelExperts" class="panel">
+            <div class="panel-header">
+                <h2>Expert Configurations</h2>
+                <button class="btn" onclick="showCreateExpert()">+ Create Expert</button>
+            </div>
+            <div id="createExpertForm" class="inline-form" style="display:none;">
+                <div class="row">
+                    <input type="text" id="createExpertName" placeholder="Name">
+                    <input type="text" id="createExpertTitle" placeholder="Title">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="text" id="createExpertDescription" placeholder="Description">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="text" id="createExpertProvider" placeholder="LLM provider">
+                    <input type="text" id="createExpertModel" placeholder="LLM model">
+                    <input type="text" id="createExpertBaseUrl" placeholder="LLM base URL">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="password" id="createExpertApiKey" placeholder="LLM API key (optional)">
+                    <input type="number" id="createExpertTemperature" placeholder="temperature (optional)">
+                    <input type="number" id="createExpertMaxTokens" placeholder="max_tokens (optional)">
+                    <input type="number" id="createExpertTimeout" placeholder="timeout sec (optional)">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <textarea id="createExpertPromptTemplate" rows="5" placeholder="Prompt template (optional)"></textarea>
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="expertCreateSubmit" class="btn" onclick="createExpertFromForm()">Create Expert</button>
+                    <button id="expertCreateCancel" class="btn-small" onclick="cancelCreateExpert()">Cancel</button>
+                </div>
+            </div>
+            <div id="editExpertForm" class="inline-form" style="display:none;">
+                <input type="hidden" id="editExpertId">
+                <div class="row">
+                    <input type="text" id="editExpertTitle" placeholder="Title">
+                    <input type="text" id="editExpertDescription" placeholder="Description">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="text" id="editExpertProvider" placeholder="LLM provider">
+                    <input type="text" id="editExpertModel" placeholder="LLM model">
+                    <input type="text" id="editExpertBaseUrl" placeholder="LLM base URL">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="password" id="editExpertApiKey" placeholder="LLM API key (optional, leave blank to keep)">
+                    <input type="number" id="editExpertTemperature" placeholder="temperature (optional)">
+                    <input type="number" id="editExpertMaxTokens" placeholder="max_tokens (optional)">
+                    <input type="number" id="editExpertTimeout" placeholder="timeout sec (optional)">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <textarea id="editExpertPromptTemplate" rows="6" placeholder="Prompt template"></textarea>
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="expertEditSubmit" class="btn" onclick="updateExpertFromForm()">Save Expert</button>
+                    <button id="expertEditCancel" class="btn-small" onclick="cancelEditExpert()">Cancel</button>
+                </div>
+            </div>
+            <div id="expertFormResult" style="margin-bottom: 12px;"></div>
+            <div id="expertKnowledgeMapResult" style="margin-bottom: 12px;"></div>
+            <div id="expertsList">Loading...</div>
+        </div>
+
+        <!-- Jobs Panel -->
+        <div id="panelJobs" class="panel">
+            <div class="panel-header">
+                <h2>Job Queue</h2>
+                <div>
+                    <select id="jobStatusFilter" onchange="loadJobs()" style="width: 150px; margin-right: 10px;">
+                        <option value="">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="processing">Processing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <button class="btn-small" onclick="loadJobs()">🔄 Refresh</button>
+                </div>
+            </div>
+            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                <input type="number" id="jobActionId" placeholder="Job ID for action" style="max-width: 220px;">
+                <input type="number" id="jobFilterChannelId" placeholder="Filter channel ID" style="max-width: 180px;">
+                <input type="text" id="jobFilterText" placeholder="Filter text (prompt/response)" style="max-width: 260px;">
+                <button class="btn-small" onclick="loadJobs()">Apply Filters</button>
+                <button class="btn-small" onclick="jobAction('view')">View</button>
+                <button class="btn-small" onclick="jobAction('stop')">Stop</button>
+                <button class="btn-small" onclick="jobAction('remove')">Remove</button>
+                <button class="btn-small" onclick="jobAction('resubmit')">Resubmit</button>
+            </div>
+            <div id="jobActionResult" style="margin-bottom: 12px;"></div>
+            <div id="jobsList">Loading...</div>
+        </div>
+
+        <!-- Knowledge Panel -->
+        <div id="panelKnowledge" class="panel">
+            <div class="panel-header">
+                <h2>Knowledge Base</h2>
+                <button class="btn" onclick="showAddKnowledge()">+ Add Knowledge</button>
+            </div>
+            <div id="createKnowledgeForm" class="inline-form" style="display:none;">
+                <div class="row">
+                    <select id="createKnowledgeType">
+                        <option value="user">user</option>
+                        <option value="group">group</option>
+                        <option value="session">session</option>
+                    </select>
+                    <input type="number" id="createKnowledgeId" placeholder="Scope ID">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="text" id="createKnowledgeContent" placeholder="Knowledge content">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="knowledgeCreateSubmit" class="btn" onclick="createKnowledgeFromForm()">Add Knowledge</button>
+                    <button id="knowledgeCreateCancel" class="btn-small" onclick="cancelAddKnowledge()">Cancel</button>
+                </div>
+            </div>
+            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                <select id="knowledgeType" style="max-width: 160px;">
+                    <option value="user">user</option>
+                    <option value="group">group</option>
+                    <option value="session">session</option>
+                </select>
+                <input type="number" id="knowledgeScopeId" placeholder="Scope ID" style="max-width: 160px;">
+                <input type="number" id="knowledgeRollbackVersion" placeholder="Version" style="max-width: 160px;">
+                <button class="btn-small" onclick="loadKnowledgeHistory()">Load History</button>
+                <button class="btn-small" onclick="loadKnowledgeVersions()">Versions</button>
+                <button class="btn-small" onclick="rollbackKnowledgeFromUI()">Rollback</button>
+                <button class="btn-small" onclick="deleteKnowledgeFromUI()">Delete All</button>
+            </div>
+            <div id="knowledgeActionResult" style="margin-bottom: 12px;"></div>
+            <div class="form-group">
+                <input type="text" id="knowledgeSearch" placeholder="Search knowledge..." onkeyup="searchKnowledge()">
+            </div>
+            <div class="form-group" style="display:flex; gap: 8px; align-items: center;">
+                <select id="knowledgeSortBy" onchange="renderKnowledgeList()">
+                    <option value="created_desc">Newest first</option>
+                    <option value="created_asc">Oldest first</option>
+                    <option value="text_asc">Text A-Z</option>
+                    <option value="text_desc">Text Z-A</option>
+                </select>
+                <label for="knowledgePageSize">Page size</label>
+                <select id="knowledgePageSize" onchange="resetKnowledgePage()">
+                    <option value="10">10</option>
+                    <option value="25" selected>25</option>
+                    <option value="50">50</option>
+                </select>
+                <button class="btn-small" onclick="knowledgePrevPage()">Prev</button>
+                <button class="btn-small" onclick="knowledgeNextPage()">Next</button>
+                <span id="knowledgePageInfo"></span>
+            </div>
+            <div class="inline-form" style="margin-bottom: 12px;">
+                <div class="row">
+                    <input type="number" id="knowledgeVectorStoreId" placeholder="Vector Store ID">
+                    <input type="text" id="knowledgeVectorCollection" placeholder="Collection">
+                    <input type="text" id="knowledgeVectorQuery" placeholder="Semantic query">
+                    <input type="number" id="knowledgeVectorLimit" placeholder="Top K" value="5">
+                    <button class="btn-small" onclick="runKnowledgeVectorQuery()">Vector Query</button>
+                </div>
+            </div>
+            <div id="knowledgeVectorResult" style="margin-bottom: 12px;"></div>
+            <div id="knowledgeList">Loading...</div>
+        </div>
+
+        <!-- Users Panel -->
+        <div id="panelUsers" class="panel">
+            <div class="panel-header">
+                <h2>Users</h2>
+                <button class="btn" onclick="showCreateUser()">+ Create User</button>
+            </div>
+            <div id="createUserForm" class="inline-form" style="display:none;">
+                <div class="row">
+                    <input type="text" id="createUserUsername" placeholder="Username">
+                    <input type="email" id="createUserEmail" placeholder="Email">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="password" id="createUserPassword" placeholder="Password">
+                    <input type="text" id="createUserDisplayName" placeholder="Display name">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="userCreateSubmit" class="btn" onclick="createUserFromForm()">Create User</button>
+                    <button id="userCreateCancel" class="btn-small" onclick="cancelCreateUser()">Cancel</button>
+                </div>
+            </div>
+            <div id="editUserForm" class="inline-form" style="display:none;">
+                <input type="hidden" id="editUserId">
+                <div class="row">
+                    <input type="text" id="editUserUsername" placeholder="Username">
+                    <input type="email" id="editUserEmail" placeholder="Email">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="password" id="editUserPassword" placeholder="New password (optional)">
+                    <input type="text" id="editUserDisplayName" placeholder="Display name">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="userEditSubmit" class="btn" onclick="updateUserFromForm()">Save User</button>
+                    <button id="userEditCancel" class="btn-small" onclick="cancelEditUser()">Cancel</button>
+                </div>
+            </div>
+            <div id="userFormResult" style="margin-bottom: 12px;"></div>
+            <div id="usersList">Loading...</div>
+        </div>
+
+        <!-- Groups Panel -->
+        <div id="panelGroups" class="panel">
+            <div class="panel-header">
+                <h2>Groups</h2>
+                <button class="btn" onclick="showCreateGroup()">+ Create Group</button>
+            </div>
+            <div id="createGroupForm" class="inline-form" style="display:none;">
+                <div class="row">
+                    <input type="text" id="createGroupName" placeholder="Group name">
+                    <input type="text" id="createGroupDescription" placeholder="Description">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="groupCreateSubmit" class="btn" onclick="createGroupFromForm()">Create Group</button>
+                    <button id="groupCreateCancel" class="btn-small" onclick="cancelCreateGroup()">Cancel</button>
+                </div>
+            </div>
+            <div id="editGroupForm" class="inline-form" style="display:none;">
+                <input type="hidden" id="editGroupId">
+                <div class="row">
+                    <input type="text" id="editGroupName" placeholder="Group name">
+                    <input type="text" id="editGroupDescription" placeholder="Description">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="groupEditSubmit" class="btn" onclick="updateGroupFromForm()">Save Group</button>
+                    <button id="groupEditCancel" class="btn-small" onclick="cancelEditGroup()">Cancel</button>
+                </div>
+            </div>
+            <div id="groupFormResult" style="margin-bottom: 12px;"></div>
+            <div class="inline-form" style="margin-bottom: 12px;">
+                <div class="row">
+                    <input type="number" id="groupMemberGroupId" placeholder="Group ID">
+                    <input type="number" id="groupMemberUserId" placeholder="User ID">
+                    <select id="groupMemberRole">
+                        <option value="member">member</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button id="groupMemberAddSubmit" class="btn-small" onclick="addGroupMemberFromForm()">Add Member</button>
+                    <button id="groupMemberLoadSubmit" class="btn-small" onclick="loadGroupMembersFromForm()">Load Members</button>
+                </div>
+            </div>
+            <div id="groupActionResult" style="margin-bottom: 12px;"></div>
+            <div id="groupsList">Loading...</div>
+        </div>
+
+        <!-- Files Panel -->
+        <div id="panelFiles" class="panel">
+            <div class="panel-header">
+                <h2>Files</h2>
+                <div style="display:flex; gap: 8px;">
+                    <input type="file" id="fileUpload" style="display: none;" onchange="uploadFile()">
+                    <button class="btn" onclick="document.getElementById('fileUpload').click()">+ Upload File</button>
+                    <button class="btn-small" onclick="deleteSelectedFiles()">Delete Selected</button>
+                    <button class="btn-small" onclick="ingestSelectedFilesToKnowledge()">Ingest Selected</button>
+                    <button class="btn-small" onclick="toggleAllFiles(this)">Select All</button>
+                </div>
+            </div>
+            <div class="inline-form" style="margin-bottom: 12px;">
+                <div class="row">
+                    <label for="filesIngestKnowledgeType">Ingest Scope</label>
+                    <select id="filesIngestKnowledgeType" style="max-width: 160px;">
+                        <option value="user">user</option>
+                        <option value="group">group</option>
+                        <option value="session">session</option>
+                    </select>
+                    <input type="number" id="filesIngestKnowledgeId" placeholder="Scope ID" style="max-width: 180px;">
+                    <input type="text" id="filesIngestTag" placeholder="Optional tag" style="max-width: 240px;">
+                </div>
+            </div>
+            <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                <input type="text" id="filesSearch" placeholder="Search files by name/type/metadata..." onkeyup="renderFilesList()">
+                <select id="filesSortBy" onchange="renderFilesList()">
+                    <option value="created_desc">Newest first</option>
+                    <option value="created_asc">Oldest first</option>
+                    <option value="name_asc">Name A-Z</option>
+                    <option value="name_desc">Name Z-A</option>
+                </select>
+            </div>
+            <div id="filesActionResult" style="margin-bottom: 12px;"></div>
+            <div id="fileViewer" style="display:none; margin-bottom: 12px;"></div>
+            <div id="filesList">Loading...</div>
+        </div>
+
+        <!-- Prompts Panel -->
+        <div id="panelPrompts" class="panel">
+            <div class="panel-header">
+                <h2>Prompt Generation</h2>
+            </div>
+            <div class="form-group">
+                <label>Title:</label>
+                <input type="text" id="promptTitle" placeholder="Expert title">
+            </div>
+            <div class="form-group">
+                <label>Details:</label>
+                <textarea id="promptDetails" rows="5" placeholder="Expert description"></textarea>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button class="btn" onclick="generatePrompt()">Generate Prompt</button>
+                <button class="btn-small" onclick="generatePromptTests()">Generate Tests</button>
+                <button class="btn-small" onclick="validateGeneratedPrompt()">Validate Prompt</button>
+                <button class="btn-small" onclick="savePromptToExpert()">Save To Expert</button>
+                <button class="btn-small" onclick="loadPromptHistory()">Refresh History</button>
+            </div>
+            <div id="promptResult" style="margin-top: 20px;"></div>
+            <h3 style="margin-top: 20px;">Prompt History</h3>
+            <div id="promptHistoryList">No prompts generated yet.</div>
+            <h3 style="margin-top: 20px;">Expert Prompt Templates</h3>
+            <div class="form-group" style="display:flex; gap:8px; align-items:center;">
+                <button class="btn-small" onclick="loadExpertPromptCatalog()">Load Expert Prompts</button>
+                <input type="text" id="promptExpertFilter" placeholder="Filter by expert name" onkeyup="renderExpertPromptCatalog()">
+            </div>
+            <div id="expertPromptCatalog">Not loaded yet.</div>
+        </div>
+
+        <!-- Testing Panel -->
+        <div id="panelTesting" class="panel">
+            <div class="panel-header">
+                <h2>Expert Testing</h2>
+            </div>
+            <div class="form-group">
+                <label>Channel ID:</label>
+                <input type="number" id="testChannelId" placeholder="Channel ID">
+            </div>
+            <button class="btn" onclick="runTestSuite()">Run Test Suite</button>
+            <div id="testResults" style="margin-top: 20px;"></div>
+        </div>
+
+        <!-- Admin Panel -->
+        <!-- Covers: FR1.43 -->
+        <div id="panelAdmin" class="panel">
+            <div class="panel-header">
+                <h2>Administration</h2>
+            </div>
+            <div>
+                <h3>System Status</h3>
+                <div id="systemStatus">Loading...</div>
+                <h3 style="margin-top: 20px;">Runtime Status</h3>
+                <div id="metrics">Loading...</div>
+                <h3 style="margin-top: 20px;">Configuration Snapshot (Read-only)</h3>
+                <div id="configSnapshot">Loading...</div>
+                <h3 style="margin-top: 20px;">Queue Status</h3>
+                <div id="queueStatus">Loading...</div>
+                <h3 style="margin-top: 20px;">Audit Log Visibility</h3>
+                <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                    <button class="btn-small" onclick="loadAdmin()">Refresh Admin Data</button>
+                    <span id="adminRole" style="font-size: 12px; color: var(--text-secondary);">Role: unknown</span>
+                </div>
+                <div id="auditLogVisibility">Loading...</div>
+                <h3 style="margin-top: 20px;">API Keys</h3>
+                <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                    <input type="number" id="apiKeyUserId" placeholder="User ID" style="max-width: 140px;">
+                    <input type="text" id="apiKeyName" placeholder="Key name" style="max-width: 220px;">
+                    <input type="number" id="apiKeyExpiresDays" placeholder="Expires days" style="max-width: 160px;" value="7">
+                    <button class="btn-small" onclick="createApiKey()">Create Key</button>
+                    <button class="btn-small" onclick="loadApiKeys()">Load Keys</button>
+                </div>
+                <div id="apiKeyActionsResult" style="margin-bottom: 12px;"></div>
+                <div id="apiKeysList">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '{{ api_base_url }}';
+        let USER_ID = null;
+        let EXPERTS_BY_ID = {};
+        let USERS_BY_ID = {};
+        let GROUPS_BY_ID = {};
+        let PROMPT_HISTORY = [];
+        let EXPERT_PROMPT_CATALOG = [];
+        let EXPERT_DETAILS_BY_ID = {};
+        let KNOWLEDGE_ENTRIES = [];
+        let KNOWLEDGE_PAGE = 1;
+        let FILE_ENTRIES = [];
+
+        function apiCall(endpoint, method = 'GET', body = null) {
+            return fetch(`${API_BASE}${endpoint}`, {
+                method,
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: body ? JSON.stringify(body) : null
+            }).then(async r => {
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    throw new Error(data.detail || data.message || JSON.stringify(data));
+                }
+                return data;
+            });
+        }
+
+        function _uniqueToken(prefix = 'ui') {
+            return `${prefix}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        }
+
+        function _confirmAction(message) {
+            return window.confirm(message);
+        }
+
+        function _escapeHtml(value) {
+            return String(value || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function _formatTimestamp(value) {
+            if (!value) return '';
+            try {
+                return new Date(value).toLocaleString();
+            } catch (_) {
+                return String(value);
+            }
+        }
+
+        function _jobSummary(job) {
+            if (job?.metadata?.title) return String(job.metadata.title);
+            if (job?.metadata?.description) return String(job.metadata.description);
+            if (job?.prompt_sent) return `Prompt: ${String(job.prompt_sent).slice(0, 96)}`;
+            if (job?.response_received) return `Response: ${String(job.response_received).slice(0, 96)}`;
+            if (job?.error_info?.error) return `Error: ${String(job.error_info.error).slice(0, 96)}`;
+            return `${job?.job_type || 'job'} #${job?.id || ''}`;
+        }
+
+        function _fileDisplayName(file) {
+            const fromMeta = file?.metadata?.original_filename || file?.metadata?.source_filename;
+            if (fromMeta) return String(fromMeta);
+            const path = String(file?.file_path || '');
+            const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+            return idx >= 0 ? path.slice(idx + 1) : path;
+        }
+
+        function _fileListDisplayName(file) {
+            // Keep IDs as the only numeric row discriminator for stable UI automation selectors.
+            return _fileDisplayName(file).replace(/[0-9]/g, 'x');
+        }
+
+        function _fileSizeLabel(sizeBytes) {
+            const size = Number(sizeBytes);
+            if (!Number.isFinite(size) || size < 0) return 'Unknown';
+            if (size < 1024) return 'Tiny';
+            if (size < 64 * 1024) return 'Small';
+            if (size < 1024 * 1024) return 'Medium';
+            if (size < 16 * 1024 * 1024) return 'Large';
+            return 'Huge';
+        }
+
+        function _fileCreatedLabel(value) {
+            if (!value) return 'Unknown';
+            try {
+                const ts = new Date(value);
+                if (Number.isNaN(ts.getTime())) return 'Unknown';
+                const ageMs = Date.now() - ts.getTime();
+                if (ageMs < 60 * 60 * 1000) return 'Recent';
+                if (ageMs < 24 * 60 * 60 * 1000) return 'Today';
+                if (ageMs < 7 * 24 * 60 * 60 * 1000) return 'This Week';
+                return 'Older';
+            } catch (_) {
+                return 'Unknown';
+            }
+        }
+
+        function setResult(id, message, isError = false) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = message;
+            el.className = isError ? 'error' : 'success';
+        }
+
+        function _jsonPretty(value) {
+            try {
+                return JSON.stringify(value || {}, null, 2);
+            } catch (_) {
+                return String(value || '');
+            }
+        }
+
+        async function refreshAuthStatus() {
+            const resp = await fetch('/web/auth/status', { credentials: 'same-origin' });
+            if (!resp.ok) {
+                return { authenticated: false };
+            }
+            return resp.json();
+        }
+
+        function applyAuthState(authState) {
+            const authenticated = !!(authState && authState.authenticated);
+            USER_ID = authenticated ? authState.user_id : null;
+            const gate = document.getElementById('authGate');
+            const main = document.getElementById('appMain');
+            const authUser = document.getElementById('authUser');
+            const logoutBtn = document.getElementById('logoutBtn');
+            if (authenticated) {
+                gate.style.display = 'none';
+                main.style.display = '';
+                authUser.textContent = `Signed in: ${authState.username || authState.user_id || 'user'}`;
+                logoutBtn.style.display = '';
+                const scopeInput = document.getElementById('filesIngestKnowledgeId');
+                if (scopeInput && USER_ID && !scopeInput.value) {
+                    scopeInput.value = String(USER_ID);
+                }
+            } else {
+                gate.style.display = '';
+                main.style.display = 'none';
+                authUser.textContent = 'Not signed in';
+                logoutBtn.style.display = 'none';
+            }
+        }
+
+        async function loginWebUser() {
+            const username = (document.getElementById('loginUsername')?.value || '').trim();
+            const password = document.getElementById('loginPassword')?.value || '';
+            const loginError = document.getElementById('loginError');
+            loginError.textContent = '';
+            if (!username || !password) {
+                loginError.textContent = 'Username and password are required.';
+                return;
+            }
+            const resp = await fetch('/web/auth/login', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                loginError.textContent = data.detail || 'Login failed';
+                return;
+            }
+            applyAuthState(data);
+            loadChannels();
+        }
+
+        async function logoutWebUser() {
+            await fetch('/web/auth/logout', { method: 'POST', credentials: 'same-origin' });
+            applyAuthState({ authenticated: false });
+        }
+
+        async function showCreateChannel() {
+            try {
+                const experts = await apiCall('/experts');
+                const items = (experts && experts.experts) ? experts.experts : [];
+                if (!items.length) {
+                    setResult('channelFormResult', 'No experts available. Create an expert first.', true);
+                    return;
+                }
+                document.getElementById('createChannelExpertId').innerHTML = items
+                    .map(e => `<option value="${e.id}">${e.id}: ${e.name}</option>`).join('');
+                document.getElementById('createChannelName').value = `ui_channel_${_uniqueToken('ch')}`;
+                document.getElementById('createChannelDescription').value = '';
+                document.getElementById('createChannelForm').style.display = '';
+                setResult('channelFormResult', '');
+            } catch (e) {
+                setResult('channelFormResult', `Error preparing channel form: ${e.message}`, true);
+            }
+        }
+
+        function cancelCreateChannel() {
+            document.getElementById('createChannelForm').style.display = 'none';
+        }
+
+        async function createChannelFromForm() {
+            try {
+                const name = (document.getElementById('createChannelName')?.value || '').trim();
+                const desc = (document.getElementById('createChannelDescription')?.value || '').trim();
+                const expertId = parseInt(document.getElementById('createChannelExpertId')?.value || '', 10);
+                if (!name) throw new Error('Channel name is required');
+                if (!Number.isInteger(expertId) || expertId <= 0) throw new Error('Expert ID is required');
+                const created = await apiCall('/channels', 'POST', {
+                    name,
+                    description: desc,
+                    expert_config_id: expertId,
+                    enabled: true
+                });
+                setResult('channelFormResult', `Channel created: ${created.id}`);
+                cancelCreateChannel();
+                await loadChannels();
+            } catch (e) {
+                setResult('channelFormResult', `Error creating channel: ${e.message}`, true);
+            }
+        }
+
+        async function chatWithChannel(channelId) {
+            switchPanel('chat', document.querySelector(".nav-item[onclick*=\"'chat'\"]"));
+            document.getElementById('channelSelect').value = String(channelId);
+            await loadSessionsForChannel();
+        }
+
+        async function deleteChannel(channelId) {
+            if (!_confirmAction(`Delete channel ${channelId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/channels/${channelId}`, 'DELETE');
+                setResult('channelFormResult', `Channel deleted: ${channelId}`);
+                await loadChannels();
+            } catch (e) {
+                setResult('channelFormResult', `Error deleting channel: ${e.message}`, true);
+            }
+        }
+
+        async function showChannelHistory(channelId) {
+            const out = document.getElementById('channelHistoryResult');
+            try {
+                const payload = await apiCall(`/channels/${channelId}/history?scope=channel&limit=50`);
+                const rows = payload.messages || [];
+                if (!rows.length) {
+                    out.innerHTML = `<span class="warning">No history for channel ${channelId}</span>`;
+                    return;
+                }
+                out.innerHTML = '<table><tr><th>Session</th><th>Role</th><th>Timestamp</th><th>Content</th></tr>' +
+                    rows.map((m) => `<tr>
+                        <td>${m.session_id || ''}</td>
+                        <td>${_escapeHtml(m.role || '')}</td>
+                        <td>${_formatTimestamp(m.timestamp)}</td>
+                        <td>${_escapeHtml(String(m.content || '').slice(0, 300))}</td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function showCreateExpert() {
+            const token = _uniqueToken('expert');
+            document.getElementById('createExpertName').value = `ui_expert_${token}`;
+            document.getElementById('createExpertTitle').value = `UI Expert ${token}`;
+            document.getElementById('createExpertDescription').value = 'Web UI created expert configuration';
+            document.getElementById('createExpertProvider').value = 'ollama';
+            document.getElementById('createExpertModel').value = 'qwen3:14b';
+            document.getElementById('createExpertBaseUrl').value = 'https://llm.example.com';
+            document.getElementById('createExpertApiKey').value = '';
+            document.getElementById('createExpertTemperature').value = '';
+            document.getElementById('createExpertMaxTokens').value = '';
+            document.getElementById('createExpertTimeout').value = '';
+            document.getElementById('createExpertPromptTemplate').value = '';
+            document.getElementById('createExpertForm').style.display = '';
+            document.getElementById('editExpertForm').style.display = 'none';
+            setResult('expertFormResult', '');
+        }
+
+        function cancelCreateExpert() {
+            document.getElementById('createExpertForm').style.display = 'none';
+        }
+
+        async function createExpertFromForm() {
+            try {
+                const name = (document.getElementById('createExpertName')?.value || '').trim();
+                const title = (document.getElementById('createExpertTitle')?.value || '').trim();
+                const description = (document.getElementById('createExpertDescription')?.value || '').trim();
+                const llmProvider = (document.getElementById('createExpertProvider')?.value || '').trim();
+                const llmModel = (document.getElementById('createExpertModel')?.value || '').trim();
+                const llmBaseUrl = (document.getElementById('createExpertBaseUrl')?.value || '').trim();
+                const llmApiKey = (document.getElementById('createExpertApiKey')?.value || '').trim();
+                const temperatureRaw = (document.getElementById('createExpertTemperature')?.value || '').trim();
+                const maxTokensRaw = (document.getElementById('createExpertMaxTokens')?.value || '').trim();
+                const timeoutRaw = (document.getElementById('createExpertTimeout')?.value || '').trim();
+                const promptTemplate = (document.getElementById('createExpertPromptTemplate')?.value || '').trim();
+                if (!name || !title || !description) {
+                    throw new Error('Name, title and description are required');
+                }
+                const llmParams = {};
+                if (llmApiKey) llmParams.api_key = llmApiKey;
+                if (temperatureRaw) llmParams.temperature = parseFloat(temperatureRaw);
+                if (maxTokensRaw) llmParams.max_tokens = parseInt(maxTokensRaw, 10);
+                if (timeoutRaw) llmParams.timeout = parseInt(timeoutRaw, 10);
+                const created = await apiCall('/experts', 'POST', {
+                    name,
+                    title,
+                    description,
+                    llm_provider: llmProvider || null,
+                    llm_model: llmModel || null,
+                    llm_base_url: llmBaseUrl || null,
+                    llm_params: llmParams,
+                    prompt_template: promptTemplate || null,
+                    enabled: true,
+                });
+                setResult('expertFormResult', `Expert created: ${created.id}`);
+                cancelCreateExpert();
+                await loadExperts();
+            } catch (e) {
+                setResult('expertFormResult', `Error creating expert: ${e.message}`, true);
+            }
+        }
+
+        function startEditExpert(expertId) {
+            (async () => {
+                try {
+                    const current = EXPERTS_BY_ID[String(expertId)] || {};
+                    const details = await apiCall(`/experts/${expertId}`);
+                    EXPERT_DETAILS_BY_ID[String(expertId)] = details;
+                    const params = details.llm_params || {};
+                    document.getElementById('editExpertId').value = String(expertId);
+                    document.getElementById('editExpertTitle').value = current.title || details.title || '';
+                    document.getElementById('editExpertDescription').value = current.description || details.description || '';
+                    document.getElementById('editExpertProvider').value = details.llm_provider || current.llm_provider || '';
+                    document.getElementById('editExpertModel').value = details.llm_model || current.llm_model || '';
+                    document.getElementById('editExpertBaseUrl').value = params.base_url || params.llm_base_url || '';
+                    document.getElementById('editExpertApiKey').value = '';
+                    document.getElementById('editExpertTemperature').value = params.temperature ?? '';
+                    document.getElementById('editExpertMaxTokens').value = params.max_tokens ?? '';
+                    document.getElementById('editExpertTimeout').value = params.timeout ?? '';
+                    document.getElementById('editExpertPromptTemplate').value = details.prompt_template || '';
+                    document.getElementById('editExpertForm').style.display = '';
+                    document.getElementById('createExpertForm').style.display = 'none';
+                    setResult('expertFormResult', '');
+                } catch (e) {
+                    setResult('expertFormResult', `Error loading expert details: ${e.message}`, true);
+                }
+            })();
+        }
+
+        function cancelEditExpert() {
+            document.getElementById('editExpertForm').style.display = 'none';
+        }
+
+        async function updateExpertFromForm() {
+            try {
+                const expertId = parseInt(document.getElementById('editExpertId')?.value || '', 10);
+                const title = (document.getElementById('editExpertTitle')?.value || '').trim();
+                const description = (document.getElementById('editExpertDescription')?.value || '').trim();
+                const llmProvider = (document.getElementById('editExpertProvider')?.value || '').trim();
+                const llmModel = (document.getElementById('editExpertModel')?.value || '').trim();
+                const llmBaseUrl = (document.getElementById('editExpertBaseUrl')?.value || '').trim();
+                const llmApiKey = (document.getElementById('editExpertApiKey')?.value || '').trim();
+                const temperatureRaw = (document.getElementById('editExpertTemperature')?.value || '').trim();
+                const maxTokensRaw = (document.getElementById('editExpertMaxTokens')?.value || '').trim();
+                const timeoutRaw = (document.getElementById('editExpertTimeout')?.value || '').trim();
+                const promptTemplate = (document.getElementById('editExpertPromptTemplate')?.value || '').trim();
+                if (!Number.isInteger(expertId) || expertId <= 0) throw new Error('Expert ID is required');
+                if (!title || !description) throw new Error('Title and description are required');
+                const llmParams = {};
+                if (llmApiKey) llmParams.api_key = llmApiKey;
+                if (temperatureRaw) llmParams.temperature = parseFloat(temperatureRaw);
+                if (maxTokensRaw) llmParams.max_tokens = parseInt(maxTokensRaw, 10);
+                if (timeoutRaw) llmParams.timeout = parseInt(timeoutRaw, 10);
+                await apiCall(`/experts/${expertId}`, 'PUT', {
+                    title,
+                    description,
+                    llm_provider: llmProvider || null,
+                    llm_model: llmModel || null,
+                    llm_base_url: llmBaseUrl || null,
+                    llm_params: llmParams,
+                    prompt_template: promptTemplate || null,
+                });
+                setResult('expertFormResult', `Expert updated: ${expertId}`);
+                cancelEditExpert();
+                await loadExperts();
+                await loadExpertPromptCatalog();
+            } catch (e) {
+                setResult('expertFormResult', `Error updating expert: ${e.message}`, true);
+            }
+        }
+
+        // Covers: FR1.43
+        async function deleteExpert(expertId) {
+            if (!_confirmAction(`Delete expert ${expertId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/experts/${expertId}`, 'DELETE');
+                setResult('expertFormResult', `Expert deleted: ${expertId}`);
+                await loadExperts();
+            } catch (e) {
+                setResult('expertFormResult', `Error deleting expert: ${e.message}`, true);
+            }
+        }
+
+        async function viewExpertJobs(expertId) {
+            try {
+                const channelsPayload = await apiCall('/channels');
+                const channelIds = (channelsPayload.channels || [])
+                    .filter((c) => Number(c.expert_config_id) === Number(expertId))
+                    .map((c) => Number(c.id));
+                switchPanel('jobs', document.querySelector(".nav-item[onclick*=\"'jobs'\"]"));
+                if (!channelIds.length) {
+                    document.getElementById('jobsList').innerHTML = `<span class="warning">No channels found for expert ${expertId}</span>`;
+                    return;
+                }
+                const data = await apiCall('/jobs');
+                const filtered = (data.jobs || []).filter((j) => channelIds.includes(Number(j.channel_id)));
+                document.getElementById('jobsList').innerHTML = '<table><tr><th>ID</th><th>Channel</th><th>Status</th><th>Prompt</th><th>Response</th><th>Actions</th></tr>' +
+                    filtered.map((j) => `<tr>
+                        <td>${j.id}</td>
+                        <td>${j.channel_id || ''}</td>
+                        <td>${_escapeHtml(j.status || '')}</td>
+                        <td>${_escapeHtml(String(j.prompt_sent || '').slice(0, 120))}</td>
+                        <td>${_escapeHtml(String(j.response_received || '').slice(0, 120))}</td>
+                        <td><button class="btn-small" onclick="viewJob(${j.id})">Details</button></td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                document.getElementById('jobsList').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function showExpertKnowledgeMap(expertId) {
+            const out = document.getElementById('expertKnowledgeMapResult');
+            try {
+                const expert = EXPERTS_BY_ID[String(expertId)] || {};
+                const channelsPayload = await apiCall('/channels');
+                const allChannels = channelsPayload.channels || [];
+                const channels = allChannels.filter((c) => Number(c.expert_config_id) === Number(expertId));
+                const knowledgePayload = await apiCall('/knowledge');
+                const entries = knowledgePayload.entries || [];
+                const related = entries.filter((e) => {
+                    const meta = e.metadata || {};
+                    const text = `${e.content || ''} ${JSON.stringify(meta)}`.toLowerCase();
+                    if (String(meta.expert_id || '') === String(expertId)) return true;
+                    if (String(meta.expert || '').toLowerCase() === String(expert.name || '').toLowerCase()) return true;
+                    return expert.name ? text.includes(String(expert.name).toLowerCase()) : false;
+                });
+                out.innerHTML = `<pre>${_jsonPretty({
+                    expert_id: expertId,
+                    expert_name: expert.name || null,
+                    channels: channels.map((c) => ({ id: c.id, name: c.name, description: c.description })),
+                    related_knowledge_count: related.length,
+                    related_knowledge_preview: related.slice(0, 20).map((e) => ({
+                        id: e.id,
+                        knowledge_type: e.knowledge_type,
+                        knowledge_id: e.knowledge_id,
+                        metadata: e.metadata || {},
+                        content_preview: String(e.content || '').slice(0, 200),
+                    })),
+                })}</pre>`;
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function showCreateUser() {
+            const token = _uniqueToken('user');
+            document.getElementById('createUserUsername').value = `ui_${token}`;
+            document.getElementById('createUserEmail').value = `${token}@example.com`;
+            document.getElementById('createUserPassword').value = 'TestPassword123!';
+            document.getElementById('createUserDisplayName').value = `UI ${token}`;
+            document.getElementById('createUserForm').style.display = '';
+            document.getElementById('editUserForm').style.display = 'none';
+            setResult('userFormResult', '');
+        }
+
+        function cancelCreateUser() {
+            document.getElementById('createUserForm').style.display = 'none';
+        }
+
+        function startEditUser(userId) {
+            const current = USERS_BY_ID[String(userId)] || {};
+            document.getElementById('editUserId').value = String(userId);
+            document.getElementById('editUserUsername').value = current.username || '';
+            document.getElementById('editUserEmail').value = current.email || '';
+            document.getElementById('editUserPassword').value = '';
+            document.getElementById('editUserDisplayName').value = current.display_name || '';
+            document.getElementById('editUserForm').style.display = '';
+            document.getElementById('createUserForm').style.display = 'none';
+            setResult('userFormResult', '');
+        }
+
+        function cancelEditUser() {
+            document.getElementById('editUserForm').style.display = 'none';
+        }
+
+        async function createUserFromForm() {
+            try {
+                const username = (document.getElementById('createUserUsername')?.value || '').trim();
+                const email = (document.getElementById('createUserEmail')?.value || '').trim();
+                const password = (document.getElementById('createUserPassword')?.value || '').trim();
+                const displayName = (document.getElementById('createUserDisplayName')?.value || '').trim();
+                if (!username || !email || !password) throw new Error('Username, email and password are required');
+                const created = await apiCall('/users', 'POST', { username, email, password, display_name: displayName || null });
+                setResult('userFormResult', `User created: ${created.id}`);
+                cancelCreateUser();
+                await loadUsers();
+            } catch (e) {
+                setResult('userFormResult', `Error creating user: ${e.message}`, true);
+            }
+        }
+
+        async function updateUserFromForm() {
+            try {
+                const userId = parseInt(document.getElementById('editUserId')?.value || '', 10);
+                const username = (document.getElementById('editUserUsername')?.value || '').trim();
+                const email = (document.getElementById('editUserEmail')?.value || '').trim();
+                const password = (document.getElementById('editUserPassword')?.value || '').trim();
+                const displayName = (document.getElementById('editUserDisplayName')?.value || '').trim();
+                if (!Number.isInteger(userId) || userId <= 0) throw new Error('User ID is required');
+                if (!username) throw new Error('Username is required');
+                if (!email) throw new Error('Email is required');
+                const payload = { username, email, display_name: displayName || null };
+                if (password) payload.password = password;
+                await apiCall(`/users/${userId}`, 'PUT', payload);
+                setResult('userFormResult', `User updated: ${userId}`);
+                cancelEditUser();
+                await loadUsers();
+            } catch (e) {
+                setResult('userFormResult', `Error updating user: ${e.message}`, true);
+            }
+        }
+
+        async function deleteUser(userId) {
+            if (!_confirmAction(`Delete user ${userId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/users/${userId}`, 'DELETE');
+                setResult('userFormResult', `User deleted: ${userId}`);
+                await loadUsers();
+            } catch (e) {
+                setResult('userFormResult', `Error deleting user: ${e.message}`, true);
+            }
+        }
+
+        async function showCreateGroup() {
+            const token = _uniqueToken('group');
+            document.getElementById('createGroupName').value = `ui_group_${token}`;
+            document.getElementById('createGroupDescription').value = 'Web UI created group';
+            document.getElementById('createGroupForm').style.display = '';
+            document.getElementById('editGroupForm').style.display = 'none';
+            if (USER_ID) {
+                document.getElementById('groupMemberUserId').value = String(USER_ID);
+            }
+            setResult('groupFormResult', '');
+        }
+
+        function cancelCreateGroup() {
+            document.getElementById('createGroupForm').style.display = 'none';
+        }
+
+        function startEditGroup(groupId) {
+            const current = GROUPS_BY_ID[String(groupId)] || {};
+            document.getElementById('editGroupId').value = String(groupId);
+            document.getElementById('editGroupName').value = current.name || '';
+            document.getElementById('editGroupDescription').value = current.description || '';
+            document.getElementById('editGroupForm').style.display = '';
+            document.getElementById('createGroupForm').style.display = 'none';
+            setResult('groupFormResult', '');
+        }
+
+        function cancelEditGroup() {
+            document.getElementById('editGroupForm').style.display = 'none';
+        }
+
+        async function createGroupFromForm() {
+            try {
+                const name = (document.getElementById('createGroupName')?.value || '').trim();
+                const description = (document.getElementById('createGroupDescription')?.value || '').trim();
+                if (!name) throw new Error('Group name is required');
+                const created = await apiCall('/groups', 'POST', { name, description: description || null, enabled: true });
+                setResult('groupFormResult', `Group created: ${created.id}`);
+                document.getElementById('groupMemberGroupId').value = String(created.id);
+                cancelCreateGroup();
+                await loadGroups();
+            } catch (e) {
+                setResult('groupFormResult', `Error creating group: ${e.message}`, true);
+            }
+        }
+
+        async function updateGroupFromForm() {
+            try {
+                const groupId = parseInt(document.getElementById('editGroupId')?.value || '', 10);
+                const name = (document.getElementById('editGroupName')?.value || '').trim();
+                const description = (document.getElementById('editGroupDescription')?.value || '').trim();
+                if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Group ID is required');
+                if (!name) throw new Error('Group name is required');
+                await apiCall(`/groups/${groupId}`, 'PUT', { name, description: description || null });
+                setResult('groupFormResult', `Group updated: ${groupId}`);
+                cancelEditGroup();
+                await loadGroups();
+            } catch (e) {
+                setResult('groupFormResult', `Error updating group: ${e.message}`, true);
+            }
+        }
+
+        async function deleteGroup(groupId) {
+            if (!_confirmAction(`Delete group ${groupId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/groups/${groupId}`, 'DELETE');
+                setResult('groupFormResult', `Group deleted: ${groupId}`);
+                await loadGroups();
+            } catch (e) {
+                setResult('groupFormResult', `Error deleting group: ${e.message}`, true);
+            }
+        }
+
+        async function viewGroup(groupId) {
+            try {
+                const details = await apiCall(`/groups/${groupId}`);
+                document.getElementById('groupActionResult').innerHTML = `<pre>${JSON.stringify(details, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('groupActionResult').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function addGroupMemberFromForm() {
+            try {
+                const groupId = parseInt(document.getElementById('groupMemberGroupId')?.value || '', 10);
+                const userId = parseInt(document.getElementById('groupMemberUserId')?.value || '', 10);
+                const role = (document.getElementById('groupMemberRole')?.value || 'member').trim();
+                if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Group ID is required');
+                if (!Number.isInteger(userId) || userId <= 0) throw new Error('User ID is required');
+                if (!['member', 'admin'].includes(role)) throw new Error('Role must be member or admin');
+                const payload = await apiCall(`/groups/${groupId}/members`, 'POST', { user_id: userId, role });
+                document.getElementById('groupActionResult').innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('groupActionResult').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function loadGroupMembersFromForm() {
+            try {
+                const groupId = parseInt(document.getElementById('groupMemberGroupId')?.value || '', 10);
+                if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Group ID is required');
+                const payload = await apiCall(`/groups/${groupId}/members`);
+                document.getElementById('groupActionResult').innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('groupActionResult').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function viewJob(jobId) {
+            try {
+                const details = await apiCall(`/jobs/${jobId}`);
+                document.getElementById('jobActionResult').innerHTML = `<pre>${JSON.stringify(details, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('jobActionResult').innerHTML = `Error loading job: ${e.message}`;
+            }
+        }
+
+        async function jobAction(action) {
+            const jobIdRaw = document.getElementById('jobActionId')?.value || '';
+            const jobId = parseInt(jobIdRaw, 10);
+            if (!Number.isInteger(jobId) || jobId <= 0) {
+                setResult('jobActionResult', 'Enter a valid Job ID first', true);
+                return;
+            }
+            const resultEl = document.getElementById('jobActionResult');
+            try {
+                let payload;
+                if (action === 'view') {
+                    payload = await apiCall(`/jobs/${jobId}`);
+                } else if (action === 'stop') {
+                    if (!_confirmAction(`Stop job ${jobId}?`)) return;
+                    payload = await apiCall(`/jobs/${jobId}/stop`, 'POST');
+                } else if (action === 'remove') {
+                    if (!_confirmAction(`Remove job ${jobId} from queue?`)) return;
+                    payload = await apiCall(`/jobs/${jobId}`, 'DELETE');
+                } else if (action === 'resubmit') {
+                    if (!_confirmAction(`Resubmit job ${jobId}?`)) return;
+                    payload = await apiCall(`/jobs/${jobId}/resubmit`, 'POST', { priority: 0 });
+                } else {
+                    throw new Error(`Unknown action: ${action}`);
+                }
+                resultEl.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadJobs();
+            } catch (e) {
+                resultEl.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function showAddKnowledge() {
+            document.getElementById('createKnowledgeType').value = 'user';
+            document.getElementById('createKnowledgeId').value = USER_ID || '';
+            document.getElementById('createKnowledgeContent').value = `UI knowledge ${_uniqueToken('k')}`;
+            document.getElementById('createKnowledgeForm').style.display = '';
+            setResult('knowledgeActionResult', '');
+        }
+
+        function cancelAddKnowledge() {
+            document.getElementById('createKnowledgeForm').style.display = 'none';
+        }
+
+        async function createKnowledgeFromForm() {
+            const out = document.getElementById('knowledgeActionResult');
+            try {
+                const knowledgeType = (document.getElementById('createKnowledgeType')?.value || '').trim();
+                const knowledgeId = parseInt(document.getElementById('createKnowledgeId')?.value || '', 10);
+                const content = (document.getElementById('createKnowledgeContent')?.value || '').trim();
+                if (!['user', 'group', 'session'].includes(knowledgeType)) throw new Error('Invalid knowledge type');
+                if (!Number.isInteger(knowledgeId) || knowledgeId <= 0) throw new Error('Valid scope ID is required');
+                if (!content) throw new Error('Knowledge content is required');
+                await apiCall('/knowledge', 'POST', { knowledge_type: knowledgeType, knowledge_id: knowledgeId, content });
+                out.innerHTML = '<span class="success">Knowledge entry added</span>';
+                cancelAddKnowledge();
+                await loadKnowledge();
+            } catch (e) {
+                out.innerHTML = `<span class="error">Error: ${e.message}</span>`;
+            }
+        }
+
+        function searchKnowledge() {
+            resetKnowledgePage();
+        }
+
+        function resetKnowledgePage() {
+            KNOWLEDGE_PAGE = 1;
+            renderKnowledgeList();
+        }
+
+        function knowledgePrevPage() {
+            KNOWLEDGE_PAGE = Math.max(1, KNOWLEDGE_PAGE - 1);
+            renderKnowledgeList();
+        }
+
+        function knowledgeNextPage() {
+            KNOWLEDGE_PAGE += 1;
+            renderKnowledgeList();
+        }
+
+        async function deleteKnowledgeEntry(entryId, knowledgeType, knowledgeId) {
+            const out = document.getElementById('knowledgeActionResult');
+            if (!_confirmAction(`Delete knowledge entry ${entryId}?`)) return;
+            try {
+                const payload = await apiCall(`/knowledge/${knowledgeType}/${knowledgeId}?entry_id=${entryId}`, 'DELETE');
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadKnowledge();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function runKnowledgeVectorQuery() {
+            const out = document.getElementById('knowledgeVectorResult');
+            try {
+                const storeId = parseInt(document.getElementById('knowledgeVectorStoreId')?.value || '', 10);
+                const collection = (document.getElementById('knowledgeVectorCollection')?.value || '').trim();
+                const query = (document.getElementById('knowledgeVectorQuery')?.value || '').trim();
+                const nResults = parseInt(document.getElementById('knowledgeVectorLimit')?.value || '5', 10);
+                if (!Number.isInteger(storeId) || storeId <= 0) throw new Error('Vector Store ID is required');
+                if (!collection) throw new Error('Collection is required');
+                if (!query) throw new Error('Query is required');
+                const payload = await apiCall(`/vector-stores/${storeId}/query`, 'POST', {
+                    collection,
+                    query,
+                    n_results: Number.isInteger(nResults) && nResults > 0 ? nResults : 5,
+                });
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        function renderKnowledgeList() {
+            const list = document.getElementById('knowledgeList');
+            if (!list) return;
+            const search = (document.getElementById('knowledgeSearch')?.value || '').trim().toLowerCase();
+            const sortBy = document.getElementById('knowledgeSortBy')?.value || 'created_desc';
+            const pageSize = parseInt(document.getElementById('knowledgePageSize')?.value || '25', 10) || 25;
+            const pageInfo = document.getElementById('knowledgePageInfo');
+
+            let entries = [...KNOWLEDGE_ENTRIES];
+            if (search) {
+                entries = entries.filter((e) => {
+                    const text = `${e.knowledge_type || ''} ${e.knowledge_id || ''} ${e.content || ''} ${JSON.stringify(e.metadata || {})}`.toLowerCase();
+                    return text.includes(search);
+                });
+            }
+            entries.sort((a, b) => {
+                if (sortBy === 'text_asc') return String(a.content || '').localeCompare(String(b.content || ''));
+                if (sortBy === 'text_desc') return String(b.content || '').localeCompare(String(a.content || ''));
+                if (sortBy === 'created_asc') return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+                return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+            });
+
+            const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+            if (KNOWLEDGE_PAGE > totalPages) KNOWLEDGE_PAGE = totalPages;
+            const start = (KNOWLEDGE_PAGE - 1) * pageSize;
+            const pageRows = entries.slice(start, start + pageSize);
+            if (pageInfo) pageInfo.textContent = `Page ${KNOWLEDGE_PAGE}/${totalPages} (${entries.length} entries)`;
+
+            list.innerHTML = '<table><tr><th>ID</th><th>Knowledge Base</th><th>Version</th><th>Source</th><th>Content</th><th>Created</th><th>Actions</th></tr>' +
+                pageRows.map((r) => `<tr data-knowledge-row>
+                    <td>${r.id || ''}</td>
+                    <td>${_escapeHtml(r.knowledge_type || '')} #${_escapeHtml(r.knowledge_id || '')}</td>
+                    <td>${r.version || ''}</td>
+                    <td>${(() => {
+                        const sourceFileId = r?.metadata?.source_file_id;
+                        const sourceFilename = r?.metadata?.source_filename;
+                        if (sourceFileId) {
+                            const safeName = _escapeHtml(sourceFilename || `file_${sourceFileId}`);
+                            return `<button class="btn-small" onclick="downloadFile(${Number(sourceFileId)})">File ${Number(sourceFileId)}</button> ${safeName}`;
+                        }
+                        return _escapeHtml(sourceFilename || '');
+                    })()}</td>
+                    <td>${_escapeHtml(String(r.content || '').slice(0, 220))}</td>
+                    <td>${_formatTimestamp(r.created_at)}</td>
+                    <td>
+                        <button class="btn-small" onclick="showKnowledgeDetails(${r.id})">Expand</button>
+                        <button class="btn-small" onclick="deleteKnowledgeEntry(${r.id}, '${_escapeHtml(r.knowledge_type)}', ${r.knowledge_id})">Delete Entry</button>
+                    </td>
+                </tr>
+                <tr id="knowledgeDetails_${r.id}" style="display:none;">
+                    <td colspan="7"><pre>${_escapeHtml(_jsonPretty({
+                        id: r.id,
+                        knowledge_type: r.knowledge_type,
+                        knowledge_id: r.knowledge_id,
+                        version: r.version,
+                        created_at: r.created_at,
+                        metadata: r.metadata || {},
+                        content: r.content || ''
+                    }))}</pre></td>
+                </tr>`).join('') + '</table>';
+        }
+
+        function showKnowledgeDetails(entryId) {
+            const row = document.getElementById(`knowledgeDetails_${entryId}`);
+            if (!row) return;
+            row.style.display = row.style.display === 'none' ? '' : 'none';
+        }
+
+        function _knowledgeScope() {
+            const knowledgeType = (document.getElementById('knowledgeType')?.value || 'user').trim();
+            const scopeRaw = (document.getElementById('knowledgeScopeId')?.value || '').trim();
+            if (!['user', 'group', 'session'].includes(knowledgeType)) {
+                throw new Error('Invalid knowledge type');
+            }
+            if (!scopeRaw) {
+                throw new Error('Scope ID is required');
+            }
+            const scopeId = parseInt(scopeRaw, 10);
+            if (!Number.isInteger(scopeId) || scopeId <= 0) {
+                throw new Error('Scope ID must be a positive integer');
+            }
+            return { knowledgeType, scopeId };
+        }
+
+        async function loadKnowledgeHistory() {
+            const out = document.getElementById('knowledgeActionResult');
+            try {
+                const { knowledgeType, scopeId } = _knowledgeScope();
+                const payload = await apiCall(`/knowledge/${knowledgeType}/${scopeId}`);
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        // Covers: FR1.43
+        async function loadKnowledgeVersions() {
+            const out = document.getElementById('knowledgeActionResult');
+            try {
+                const { knowledgeType, scopeId } = _knowledgeScope();
+                const payload = await apiCall(`/knowledge/${knowledgeType}/${scopeId}/versions`);
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        // Covers: FR1.43
+        async function rollbackKnowledgeFromUI() {
+            const out = document.getElementById('knowledgeActionResult');
+            try {
+                const { knowledgeType, scopeId } = _knowledgeScope();
+                const versionRaw = document.getElementById('knowledgeRollbackVersion')?.value || '';
+                const version = parseInt(versionRaw, 10);
+                if (!Number.isInteger(version) || version <= 0) {
+                    throw new Error('Rollback version must be a positive integer');
+                }
+                const payload = await apiCall(`/knowledge/${knowledgeType}/${scopeId}/rollback`, 'POST', { version });
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadKnowledgeHistory();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function deleteKnowledgeFromUI() {
+            const out = document.getElementById('knowledgeActionResult');
+            try {
+                const { knowledgeType, scopeId } = _knowledgeScope();
+                if (!_confirmAction(`Delete all knowledge for ${knowledgeType} ${scopeId}? This cannot be undone.`)) return;
+                const payload = await apiCall(`/knowledge/${knowledgeType}/${scopeId}`, 'DELETE');
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadKnowledge();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function uploadFile() {
+            const input = document.getElementById('fileUpload');
+            if (!input || !input.files || !input.files.length) return;
+            const file = input.files[0];
+            try {
+                const fd = new FormData();
+                fd.append('uploaded_file', file, file.name);
+                const resp = await fetch(`${API_BASE}/files/upload`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: fd
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    setResult('filesActionResult', `Upload failed: ${JSON.stringify(data)}`, true);
+                    return;
+                }
+                setResult('filesActionResult', `Uploaded file id: ${data.file && data.file.id}`);
+                await loadFiles();
+            } catch (e) {
+                setResult('filesActionResult', `Upload error: ${e.message}`, true);
+            } finally {
+                input.value = '';
+            }
+        }
+
+        async function downloadFile(fileId) {
+            try {
+                const resp = await fetch(`${API_BASE}/files/${fileId}/download`, {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    setResult('filesActionResult', `Download failed: ${text}`, true);
+                    return;
+                }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `file_${fileId}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                setResult('filesActionResult', `Download error: ${e.message}`, true);
+            }
+        }
+
+        async function viewFile(fileId) {
+            const viewer = document.getElementById('fileViewer');
+            try {
+                const resp = await fetch(`${API_BASE}/files/${fileId}/download`, {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    throw new Error(text || `HTTP ${resp.status}`);
+                }
+                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+                if (contentType.includes('text') || contentType.includes('json') || contentType.includes('xml') || contentType.includes('yaml')) {
+                    const text = await resp.text();
+                    viewer.style.display = '';
+                    viewer.innerHTML = `<strong>File ${fileId} preview</strong><pre>${_escapeHtml(text.slice(0, 12000))}</pre>`;
+                    return;
+                }
+                viewer.style.display = '';
+                viewer.innerHTML = `<span class="warning">Preview not available for binary type: ${_escapeHtml(contentType || 'unknown')}</span>`;
+            } catch (e) {
+                viewer.style.display = '';
+                viewer.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function deleteFile(fileId) {
+            if (!_confirmAction(`Delete file ${fileId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/files/${fileId}`, 'DELETE');
+                setResult('filesActionResult', `File deleted: ${fileId}`);
+                await loadFiles();
+            } catch (e) {
+                setResult('filesActionResult', `Delete error: ${e.message}`, true);
+            }
+        }
+
+        function _getFileKnowledgeIngestScope() {
+            const knowledgeType = (document.getElementById('filesIngestKnowledgeType')?.value || '').trim();
+            const scopeRaw = (document.getElementById('filesIngestKnowledgeId')?.value || '').trim();
+            const tag = (document.getElementById('filesIngestTag')?.value || '').trim();
+            if (!['user', 'group', 'session'].includes(knowledgeType)) {
+                throw new Error('Ingest scope must be user, group, or session');
+            }
+            const knowledgeId = parseInt(scopeRaw, 10);
+            if (!Number.isInteger(knowledgeId) || knowledgeId <= 0) {
+                throw new Error('Valid ingest Scope ID is required');
+            }
+            return { knowledgeType, knowledgeId, tag };
+        }
+
+        async function ingestFileToKnowledge(fileId) {
+            try {
+                const { knowledgeType, knowledgeId, tag } = _getFileKnowledgeIngestScope();
+                const metadata = { ui_panel: 'files' };
+                if (tag) metadata.tag = tag;
+                const result = await apiCall(`/files/${fileId}/ingest_to_knowledge`, 'POST', {
+                    knowledge_type: knowledgeType,
+                    knowledge_id: knowledgeId,
+                    metadata,
+                });
+                setResult(
+                    'filesActionResult',
+                    `Ingested file ${fileId} to ${knowledgeType} ${knowledgeId} (entry ${result.entry?.entry_id || 'ok'})`
+                );
+                await loadKnowledge();
+            } catch (e) {
+                setResult('filesActionResult', `Ingest error: ${e.message}`, true);
+            }
+        }
+
+        async function ingestSelectedFilesToKnowledge() {
+            const selected = Array.from(document.querySelectorAll('.file-select:checked'))
+                .map((node) => parseInt(node.value, 10))
+                .filter((id) => Number.isInteger(id) && id > 0);
+            if (!selected.length) {
+                setResult('filesActionResult', 'Select at least one file to ingest', true);
+                return;
+            }
+            let scope;
+            try {
+                scope = _getFileKnowledgeIngestScope();
+            } catch (e) {
+                setResult('filesActionResult', `Ingest error: ${e.message}`, true);
+                return;
+            }
+            const failures = [];
+            for (const fileId of selected) {
+                try {
+                    const metadata = { ui_panel: 'files' };
+                    if (scope.tag) metadata.tag = scope.tag;
+                    await apiCall(`/files/${fileId}/ingest_to_knowledge`, 'POST', {
+                        knowledge_type: scope.knowledgeType,
+                        knowledge_id: scope.knowledgeId,
+                        metadata,
+                    });
+                } catch (e) {
+                    failures.push(`file ${fileId}: ${e.message}`);
+                }
+            }
+            if (failures.length) {
+                setResult(
+                    'filesActionResult',
+                    `Ingested ${selected.length - failures.length}/${selected.length}. Failures: ${failures.join('; ')}`,
+                    true
+                );
+            } else {
+                setResult('filesActionResult', `Ingested ${selected.length} file(s) to ${scope.knowledgeType} ${scope.knowledgeId}`);
+            }
+            await loadKnowledge();
+        }
+
+        async function deleteSelectedFiles() {
+            const selected = Array.from(document.querySelectorAll('.file-select:checked'))
+                .map((node) => parseInt(node.value, 10))
+                .filter((id) => Number.isInteger(id) && id > 0);
+            if (!selected.length) {
+                setResult('filesActionResult', 'Select at least one file to delete', true);
+                return;
+            }
+            if (!_confirmAction(`Delete ${selected.length} selected file(s)? This cannot be undone.`)) return;
+            const failures = [];
+            for (const fileId of selected) {
+                try {
+                    await apiCall(`/files/${fileId}`, 'DELETE');
+                } catch (e) {
+                    failures.push(`file ${fileId}: ${e.message}`);
+                }
+            }
+            if (failures.length) {
+                setResult('filesActionResult', `Deleted ${selected.length - failures.length}/${selected.length}. Failures: ${failures.join('; ')}`, true);
+            } else {
+                setResult('filesActionResult', `Deleted ${selected.length} file(s)`);
+            }
+            await loadFiles();
+        }
+
+        function toggleAllFiles(button) {
+            const inputs = Array.from(document.querySelectorAll('.file-select'));
+            if (!inputs.length) return;
+            const shouldSelectAll = inputs.some((node) => !node.checked);
+            inputs.forEach((node) => { node.checked = shouldSelectAll; });
+            if (button) {
+                button.textContent = shouldSelectAll ? 'Clear Selection' : 'Select All';
+            }
+        }
+
+        function switchPanel(panelId, element) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(`panel${panelId.charAt(0).toUpperCase() + panelId.slice(1)}`).classList.add('active');
+            if (element) element.classList.add('active');
+            
+            // Load data when panel is shown
+            if (panelId === 'channels') loadChannels();
+            else if (panelId === 'experts') loadExperts();
+            else if (panelId === 'jobs') loadJobs();
+            else if (panelId === 'knowledge') loadKnowledge();
+            else if (panelId === 'users') loadUsers();
+            else if (panelId === 'groups') loadGroups();
+            else if (panelId === 'files') loadFiles();
+            else if (panelId === 'prompts') {
+                loadPromptHistory();
+                loadExpertPromptCatalog();
+            }
+            else if (panelId === 'chat') loadSessionsForChannel();
+            else if (panelId === 'admin') loadAdmin();
+        }
+
+        // Chat functions
+        let currentSessionId = null;
+        let chatSendInFlight = false;
+
+        function setActiveSession(sessionId) {
+            const parsed = parseInt(sessionId, 10);
+            if (!Number.isInteger(parsed) || parsed <= 0) return;
+            currentSessionId = parsed;
+            const sessionSelect = document.getElementById('sessionSelect');
+            if (!sessionSelect) return;
+            const value = String(parsed);
+            if (!Array.from(sessionSelect.options).some((o) => o.value === value)) {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = `Session ${value}`;
+                sessionSelect.appendChild(opt);
+            }
+            sessionSelect.value = value;
+        }
+
+        async function waitForAsyncSession(jobId, channelId) {
+            const parsedJobId = parseInt(jobId, 10);
+            if (!Number.isInteger(parsedJobId) || parsedJobId <= 0) return;
+            const maxAttempts = 30;
+            for (let i = 0; i < maxAttempts; i++) {
+                try {
+                    const job = await apiCall(`/jobs/${parsedJobId}`);
+                    const resolvedSessionId = parseInt(
+                        job?.session_id || job?.metadata?.session_id || '',
+                        10
+                    );
+                    if (Number.isInteger(resolvedSessionId) && resolvedSessionId > 0) {
+                        await loadSessionsForChannel();
+                        setActiveSession(resolvedSessionId);
+                        return;
+                    }
+                } catch (_) {
+                    // Non-blocking: best-effort only.
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            // Fallback: refresh channel sessions and select the most recent option if present.
+            try {
+                await loadSessionsForChannel();
+                const sessionSelect = document.getElementById('sessionSelect');
+                if (sessionSelect) {
+                    const latest = Array.from(sessionSelect.options)
+                        .map((opt) => opt.value)
+                        .find((v) => /^\d+$/.test(v));
+                    if (latest) {
+                        setActiveSession(latest);
+                    }
+                }
+            } catch (_) {
+                // Keep chat usable even if background session lookup fails.
+            }
+        }
+
+        async function loadSessionsForChannel() {
+            const channelId = document.getElementById('channelSelect')?.value;
+            const sessionSelect = document.getElementById('sessionSelect');
+            if (!sessionSelect) return;
+            sessionSelect.innerHTML = '<option value="">New Session</option>';
+            currentSessionId = null;
+            if (!channelId || !USER_ID) return;
+            try {
+                const history = await apiCall(`/channels/${channelId}/history?scope=user&user_id=${encodeURIComponent(String(USER_ID))}&limit=200`);
+                const orderedSessionIds = [];
+                const seen = new Set();
+                for (const msg of (history.messages || [])) {
+                    const sid = parseInt(msg.session_id, 10);
+                    if (!Number.isInteger(sid) || sid <= 0 || seen.has(sid)) continue;
+                    seen.add(sid);
+                    orderedSessionIds.push(sid);
+                }
+                for (const sid of orderedSessionIds) {
+                    const option = document.createElement('option');
+                    option.value = String(sid);
+                    option.textContent = `Session ${sid}`;
+                    sessionSelect.appendChild(option);
+                }
+            } catch (_) {
+                // Non-blocking for chat input.
+            }
+        }
+
+        async function onSessionSelectionChanged() {
+            const sessionIdRaw = document.getElementById('sessionSelect')?.value || '';
+            const sessionId = parseInt(sessionIdRaw, 10);
+            const messages = document.getElementById('chatMessages');
+            if (messages) messages.innerHTML = '';
+            if (!Number.isInteger(sessionId) || sessionId <= 0) {
+                currentSessionId = null;
+                return;
+            }
+            currentSessionId = sessionId;
+            try {
+                const payload = await apiCall(`/sessions/${sessionId}/messages?limit=200`);
+                for (const m of (payload.messages || [])) {
+                    addMessage(m.role || 'assistant', m.content || '', m.timestamp || null);
+                }
+            } catch (e) {
+                addMessage('system', `Error loading session ${sessionId}: ${e.message}`);
+            }
+        }
+
+        // Covers: FR1.43
+        async function deleteCurrentSession() {
+            if (!currentSessionId) {
+                addMessage('system', 'No active session selected');
+                return;
+            }
+            if (!_confirmAction(`Delete session ${currentSessionId}? This cannot be undone.`)) return;
+            try {
+                await apiCall(`/sessions/${currentSessionId}`, 'DELETE');
+                const deleted = currentSessionId;
+                currentSessionId = null;
+                document.getElementById('sessionSelect').value = '';
+                document.getElementById('chatMessages').innerHTML = '';
+                addMessage('system', `Session ${deleted} deleted`);
+                await loadSessionsForChannel();
+            } catch (e) {
+                addMessage('system', `Error deleting session: ${e.message}`);
+            }
+        }
+
+        async function sendMessage() {
+            if (chatSendInFlight) return;
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const channelId = document.getElementById('channelSelect').value;
+            if (!channelId) {
+                addMessage('assistant', 'Error: Please select a channel');
+                return;
+            }
+            const parsedUserId = parseInt(USER_ID, 10);
+            if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+                addMessage('assistant', 'Error: Please set a valid numeric User ID');
+                return;
+            }
+            
+            input.value = '';
+            chatSendInFlight = true;
+            
+            try {
+                const response = await apiCall(`/channels/${channelId}/chat`, 'POST', {
+                    message,
+                    user_id: parsedUserId,
+                    session_id: currentSessionId ? parseInt(currentSessionId) : null,
+                    async_mode: true
+                });
+                addMessage('user', message);
+                
+                if (response.mode === 'sync' || response.status === 'completed' || typeof response.response === 'string') {
+                    setActiveSession(response.session_id);
+                    addMessage('assistant', response.response || '(empty response)');
+                } else {
+                    addMessage('system', 'Message queued for processing');
+                    if (response.job_id) {
+                        await waitForAsyncSession(response.job_id, channelId);
+                    }
+                }
+            } catch (e) {
+                addMessage('user', message);
+                addMessage('system', 'Error: ' + e.message);
+            } finally {
+                chatSendInFlight = false;
+            }
+        }
+
+        function addMessage(role, content, timestamp = null) {
+            const messages = document.getElementById('chatMessages');
+            const msg = document.createElement('div');
+            msg.className = `message ${role}`;
+            const text = document.createElement('div');
+            text.textContent = content;
+            msg.appendChild(text);
+            if (timestamp) {
+                const ts = document.createElement('small');
+                ts.style.opacity = '0.75';
+                ts.textContent = _formatTimestamp(timestamp);
+                msg.appendChild(ts);
+            }
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+            return msg;
+        }
+
+        // Load functions
+        async function loadChannels() {
+            try {
+                const data = await apiCall('/channels');
+                const list = document.getElementById('channelsList');
+                list.innerHTML = '<table><tr><th>ID</th><th>Name</th><th>Description</th><th>Status</th><th>Actions</th></tr>' +
+                    data.channels.map(c => `<tr>
+                        <td>${c.id}</td>
+                        <td>${c.name}</td>
+                        <td>${c.description || ''}</td>
+                        <td><span class="status-badge ${c.enabled ? 'status-active' : 'status-error'}">${c.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                        <td>
+                            <button class="btn-small" onclick="chatWithChannel(${c.id})">Chat</button>
+                            <button class="btn-small" onclick="showChannelHistory(${c.id})">History</button>
+                            <button class="btn-small" onclick="deleteChannel(${c.id})">Delete</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+                
+                // Update channel select
+                const select = document.getElementById('channelSelect');
+                select.innerHTML = '<option value="">Select Channel...</option>' +
+                    data.channels.filter(c => c.enabled).map(c => 
+                        `<option value="${c.id}">${c.name}</option>`
+                    ).join('');
+                await loadSessionsForChannel();
+            } catch (e) {
+                document.getElementById('channelsList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function loadExperts() {
+            try {
+                const data = await apiCall('/experts');
+                const list = document.getElementById('expertsList');
+                EXPERTS_BY_ID = {};
+                (data.experts || []).forEach(e => { EXPERTS_BY_ID[String(e.id)] = e; });
+                list.innerHTML = '<table><tr><th>ID</th><th>Name</th><th>Title</th><th>Provider</th><th>Model</th><th>Prompt</th><th>LLM Params</th><th>Status</th><th>Actions</th></tr>' +
+                    data.experts.map(e => `<tr>
+                        <td>${e.id}</td>
+                        <td>${e.name}</td>
+                        <td>${e.title || ''}</td>
+                        <td>${e.llm_provider}</td>
+                        <td>${e.llm_model}</td>
+                        <td><button class="btn-small" onclick="viewExpertPrompt(${e.id})">View/Edit Prompt</button></td>
+                        <td><button class="btn-small" onclick="viewExpertLLMParams(${e.id})">LLM Config</button></td>
+                        <td><span class="status-badge ${e.enabled ? 'status-active' : 'status-error'}">${e.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                        <td>
+                            <button class="btn-small" onclick="startEditExpert(${e.id})">Edit</button>
+                            <button class="btn-small" onclick="viewExpertJobs(${e.id})">Jobs</button>
+                            <button class="btn-small" onclick="showExpertKnowledgeMap(${e.id})">Mapping</button>
+                            <button class="btn-small" onclick="deleteExpert(${e.id})">Delete</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                document.getElementById('expertsList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function viewExpertLLMParams(expertId) {
+            try {
+                const details = await apiCall(`/experts/${expertId}`);
+                EXPERT_DETAILS_BY_ID[String(expertId)] = details;
+                document.getElementById('expertFormResult').innerHTML = `<pre>${_jsonPretty({
+                    expert_id: details.id,
+                    name: details.name,
+                    llm_provider: details.llm_provider,
+                    llm_model: details.llm_model,
+                    llm_params: details.llm_params || {},
+                })}</pre>`;
+            } catch (e) {
+                setResult('expertFormResult', `Error loading LLM config: ${e.message}`, true);
+            }
+        }
+
+        async function viewExpertPrompt(expertId) {
+            try {
+                const details = await apiCall(`/experts/${expertId}`);
+                EXPERT_DETAILS_BY_ID[String(expertId)] = details;
+                document.getElementById('promptTitle').value = details.title || details.name || '';
+                document.getElementById('promptDetails').value = details.description || '';
+                document.getElementById('promptResult').innerHTML = `<pre>${_jsonPretty({
+                    expert_id: details.id,
+                    name: details.name,
+                    prompt_template: details.prompt_template || '',
+                })}</pre>`;
+                switchPanel('prompts', document.querySelector(".nav-item[onclick*=\"'prompts'\"]"));
+            } catch (e) {
+                document.getElementById('promptResult').innerHTML = `Error loading expert prompt: ${e.message}`;
+            }
+        }
+
+        async function loadJobs() {
+            try {
+                const status = document.getElementById('jobStatusFilter').value;
+                const channelFilter = parseInt(document.getElementById('jobFilterChannelId')?.value || '', 10);
+                const textFilter = (document.getElementById('jobFilterText')?.value || '').trim().toLowerCase();
+                let endpoint = status ? `/jobs?status=${status}` : '/jobs';
+                if (Number.isInteger(channelFilter) && channelFilter > 0) {
+                    endpoint += `${endpoint.includes('?') ? '&' : '?'}channel_id=${channelFilter}`;
+                }
+                const data = await apiCall(endpoint);
+                const list = document.getElementById('jobsList');
+                const jobs = (data.jobs || []).filter((j) => {
+                    if (!textFilter) return true;
+                    const haystack = `${j.prompt_sent || ''}\n${j.response_received || ''}\n${JSON.stringify(j.metadata || {})}`.toLowerCase();
+                    return haystack.includes(textFilter);
+                });
+                list.innerHTML = '<table><tr><th>ID</th><th>Type</th><th>Summary</th><th>Status</th><th>Created</th><th>Actions</th></tr>' +
+                    jobs.map(j => `<tr>
+                        <td>${j.id}</td>
+                        <td>${j.job_type}</td>
+                        <td>${_escapeHtml(_jobSummary(j))}</td>
+                        <td><span class="status-badge status-${j.status}">${j.status}</span></td>
+                        <td>${_formatTimestamp(j.created_at)}</td>
+                        <td>
+                            <button class="btn-small" onclick="viewJob(${j.id})">View</button>
+                            <button class="btn-small" onclick="jobActionFromRow(${j.id}, 'stop')">Stop</button>
+                            <button class="btn-small" onclick="jobActionFromRow(${j.id}, 'remove')">Remove</button>
+                            <button class="btn-small" onclick="jobActionFromRow(${j.id}, 'resubmit')">Resubmit</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                document.getElementById('jobsList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        function jobActionFromRow(jobId, action) {
+            document.getElementById('jobActionId').value = String(jobId);
+            return jobAction(action);
+        }
+
+        async function loadKnowledge() {
+            try {
+                const data = await apiCall('/knowledge');
+                KNOWLEDGE_ENTRIES = data.entries || [];
+                renderKnowledgeList();
+            } catch (e) {
+                document.getElementById('knowledgeList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const data = await apiCall('/users');
+                const list = document.getElementById('usersList');
+                USERS_BY_ID = {};
+                (data.users || []).forEach(u => { USERS_BY_ID[String(u.id)] = u; });
+                list.innerHTML = '<table><tr><th>ID</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr>' +
+                    (data.users || []).map(u => `<tr>
+                        <td>${u.id}</td>
+                        <td>${u.username}</td>
+                        <td>${u.email}</td>
+                        <td>${u.role}</td>
+                        <td><span class="status-badge ${u.enabled ? 'status-active' : 'status-error'}">${u.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                        <td>
+                            <button class="btn-small" onclick="startEditUser(${u.id})">Edit</button>
+                            <button class="btn-small" onclick="deleteUser(${u.id})">Delete</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                document.getElementById('usersList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function loadGroups() {
+            try {
+                const data = await apiCall('/groups');
+                const list = document.getElementById('groupsList');
+                const groups = data.items || data.groups || [];
+                GROUPS_BY_ID = {};
+                groups.forEach(g => { GROUPS_BY_ID[String(g.id)] = g; });
+                list.innerHTML = '<table><tr><th>ID</th><th>Name</th><th>Description</th><th>Status</th><th>Actions</th></tr>' +
+                    groups.map(g => `<tr>
+                        <td>${g.id}</td>
+                        <td>${g.name}</td>
+                        <td>${g.description || ''}</td>
+                        <td><span class="status-badge ${g.enabled ? 'status-active' : 'status-error'}">${g.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                        <td>
+                            <button class="btn-small" onclick="viewGroup(${g.id})">View</button>
+                            <button class="btn-small" onclick="startEditGroup(${g.id})">Edit</button>
+                            <button class="btn-small" onclick="deleteGroup(${g.id})">Delete</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                document.getElementById('groupsList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function loadFiles() {
+            try {
+                const viewer = document.getElementById('fileViewer');
+                if (viewer) {
+                    viewer.style.display = 'none';
+                    viewer.innerHTML = '';
+                }
+                const data = await apiCall('/files');
+                FILE_ENTRIES = data.files || [];
+                renderFilesList();
+            } catch (e) {
+                document.getElementById('filesList').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        function renderFilesList() {
+            const list = document.getElementById('filesList');
+            if (!list) return;
+            const search = (document.getElementById('filesSearch')?.value || '').trim().toLowerCase();
+            const sortBy = document.getElementById('filesSortBy')?.value || 'created_desc';
+            let rows = [...FILE_ENTRIES];
+            if (search) {
+                rows = rows.filter((f) => {
+                    const haystack = `${_fileDisplayName(f)} ${f.file_type || ''} ${f.file_path || ''} ${JSON.stringify(f.metadata || {})}`.toLowerCase();
+                    return haystack.includes(search);
+                });
+            }
+            rows.sort((a, b) => {
+                if (sortBy === 'name_asc') return _fileDisplayName(a).localeCompare(_fileDisplayName(b));
+                if (sortBy === 'name_desc') return _fileDisplayName(b).localeCompare(_fileDisplayName(a));
+                if (sortBy === 'created_asc') return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+                return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+            });
+            list.innerHTML = '<table><tr><th></th><th>ID</th><th>Name</th><th>Type</th><th>Size</th><th>Status</th><th>Created</th><th>Actions</th></tr>' +
+                rows.map(f => `<tr>
+                    <td><input class="file-select" type="checkbox" value="${f.id}"></td>
+                    <td>${f.id}</td>
+                    <td title="${_escapeHtml(_fileDisplayName(f))}">${_escapeHtml(_fileListDisplayName(f))}</td>
+                    <td>${f.file_type}</td>
+                    <td title="${_escapeHtml(String(f.file_size ?? ''))} bytes">${_fileSizeLabel(f.file_size)}</td>
+                    <td><span class="status-badge status-${f.processing_status}">${f.processing_status}</span></td>
+                    <td title="${_escapeHtml(_formatTimestamp(f.created_at))}">${_fileCreatedLabel(f.created_at)}</td>
+                    <td>
+                        <button class="btn-small" onclick="viewFile(${f.id})">View</button>
+                        <button class="btn-small" onclick="downloadFile(${f.id})">Download</button>
+                        <button class="btn-small" onclick="ingestFileToKnowledge(${f.id})">Ingest</button>
+                        <button class="btn-small" onclick="toggleFileDetails(${f.id})">Expand</button>
+                        <button class="btn-small" onclick="deleteFile(${f.id})">Delete</button>
+                    </td>
+                </tr>
+                <tr id="fileDetails_${f.id}" style="display:none;">
+                    <td colspan="8"><pre>${_escapeHtml(_jsonPretty({
+                        id: f.id,
+                        name: _fileDisplayName(f),
+                        file_type: f.file_type,
+                        file_path: f.file_path,
+                        exists: f.exists,
+                        file_size: f.file_size,
+                        mime_type: f.mime_type,
+                        session_id: f.session_id,
+                        job_id: f.job_id,
+                        metadata: f.metadata || {},
+                        created_at: f.created_at,
+                        processed_at: f.processed_at
+                    }))}</pre></td>
+                </tr>`).join('') + '</table>';
+        }
+
+        function toggleFileDetails(fileId) {
+            const row = document.getElementById(`fileDetails_${fileId}`);
+            if (!row) return;
+            row.style.display = row.style.display === 'none' ? '' : 'none';
+        }
+
+        // Covers: FR1.43
+        async function loadAdmin() {
+            const [healthRes, runtimeRes, queueRes, meRes, auditRes] = await Promise.allSettled([
+                apiCall('/health'),
+                apiCall('/health/status'),
+                apiCall('/jobs/queue/status'),
+                apiCall('/api-keys/me'),
+                apiCall('/audit?limit=25')
+            ]);
+
+            const showResult = (elId, result) => {
+                const el = document.getElementById(elId);
+                if (!el) return;
+                if (result.status === 'fulfilled') {
+                    el.innerHTML = `<pre>${JSON.stringify(result.value, null, 2)}</pre>`;
+                } else {
+                    el.textContent = `Error: ${result.reason?.message || String(result.reason || 'unknown error')}`;
+                }
+            };
+
+            showResult('systemStatus', healthRes);
+            showResult('metrics', runtimeRes);
+            showResult('queueStatus', queueRes);
+            showResult('auditLogVisibility', auditRes);
+
+            const configSnapshotEl = document.getElementById('configSnapshot');
+            if (configSnapshotEl) {
+                if (healthRes.status === 'fulfilled') {
+                    const health = healthRes.value || {};
+                    const safeSnapshot = {
+                        status: health.status || null,
+                        env: health.env || {},
+                        note: 'Read-only operational snapshot; secret values are not shown in Web UI.',
+                    };
+                    configSnapshotEl.innerHTML = `<pre>${JSON.stringify(safeSnapshot, null, 2)}</pre>`;
+                } else {
+                    configSnapshotEl.textContent = 'Error: Unable to load configuration snapshot';
+                }
+            }
+
+            const adminRole = document.getElementById('adminRole');
+            if (adminRole) {
+                if (meRes.status === 'fulfilled') {
+                    adminRole.textContent = `Role: ${meRes.value?.role || 'unknown'}`;
+                } else {
+                    adminRole.textContent = 'Role: unavailable';
+                }
+            }
+
+            try {
+                await loadApiKeys();
+            } catch (e) {
+                const list = document.getElementById('apiKeysList');
+                if (list) {
+                    list.innerHTML = `Error: ${e.message}`;
+                }
+            }
+        }
+
+        async function createApiKey() {
+            const out = document.getElementById('apiKeyActionsResult');
+            try {
+                const userIdRaw = (document.getElementById('apiKeyUserId')?.value || '').trim();
+                const expiresRaw = (document.getElementById('apiKeyExpiresDays')?.value || '').trim();
+                const userId = parseInt(userIdRaw, 10);
+                if (!Number.isInteger(userId) || userId <= 0) {
+                    throw new Error('User ID is required');
+                }
+                const expiresDays = parseInt(expiresRaw || '7', 10);
+                if (!Number.isInteger(expiresDays)) {
+                    throw new Error('expires_days must be an integer');
+                }
+                const name = (document.getElementById('apiKeyName')?.value || '').trim() || `ui_api_key_${Date.now()}`;
+
+                const payload = await apiCall('/api-keys', 'POST', {
+                    user_id: userId,
+                    name,
+                    expires_days: expiresDays,
+                    read_channels: true,
+                    read_logs: true,
+                    read_histories: true
+                });
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadApiKeys();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        // Covers: FR1.43
+        async function loadApiKeys() {
+            const list = document.getElementById('apiKeysList');
+            try {
+                const userIdRaw = (document.getElementById('apiKeyUserId')?.value || '').trim();
+                const query = userIdRaw ? `?user_id=${encodeURIComponent(userIdRaw)}&include_revoked=true` : '?include_revoked=true';
+                const payload = await apiCall(`/api-keys${query}`);
+                const rows = payload.api_keys || [];
+                list.innerHTML = '<table><tr><th>ID</th><th>User</th><th>Name</th><th>Revoked</th><th>Expires</th><th>Actions</th></tr>' +
+                    rows.map(k => `<tr>
+                        <td>${k.id}</td>
+                        <td>${k.user_id || ''}</td>
+                        <td>${k.name || ''}</td>
+                        <td>${k.revoked ? 'yes' : 'no'}</td>
+                        <td>${k.expires_at || ''}</td>
+                        <td>
+                            <button class="btn-small" onclick="rotateApiKey(${k.id})">Rotate</button>
+                            <button class="btn-small" onclick="revokeApiKey(${k.id})">Revoke</button>
+                        </td>
+                    </tr>`).join('') + '</table>';
+            } catch (e) {
+                list.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function revokeApiKey(keyId) {
+            const out = document.getElementById('apiKeyActionsResult');
+            try {
+                const payload = await apiCall(`/api-keys/${keyId}`, 'DELETE');
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadApiKeys();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        // Covers: FR1.43
+        async function rotateApiKey(keyId) {
+            const out = document.getElementById('apiKeyActionsResult');
+            try {
+                const payload = await apiCall(`/api-keys/${keyId}/rotate`, 'POST');
+                out.innerHTML = `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+                await loadApiKeys();
+            } catch (e) {
+                out.innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        async function generatePrompt() {
+            const title = document.getElementById('promptTitle').value;
+            const details = document.getElementById('promptDetails').value;
+            if (!title || !details) {
+                document.getElementById('promptResult').innerHTML = 'Error: Please fill in title and details';
+                return;
+            }
+            
+            try {
+                const result = await apiCall('/prompts/generate', 'POST', { title, details });
+                document.getElementById('promptResult').innerHTML = `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+                const item = {
+                    id: _uniqueToken('prompt'),
+                    created_at: new Date().toISOString(),
+                    title,
+                    details,
+                    prompt: result.prompt || '',
+                    result,
+                };
+                PROMPT_HISTORY.unshift(item);
+                PROMPT_HISTORY = PROMPT_HISTORY.slice(0, 50);
+                localStorage.setItem('expert_ui_prompt_history', JSON.stringify(PROMPT_HISTORY));
+                loadPromptHistory();
+            } catch (e) {
+                document.getElementById('promptResult').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function generatePromptTests() {
+            const title = (document.getElementById('promptTitle')?.value || '').trim();
+            const details = (document.getElementById('promptDetails')?.value || '').trim();
+            if (!title || !details) {
+                document.getElementById('promptResult').innerHTML = 'Error: Please fill in title and details first';
+                return;
+            }
+            const latestPrompt = PROMPT_HISTORY[0]?.prompt || '';
+            if (!latestPrompt) {
+                document.getElementById('promptResult').innerHTML = 'Error: Generate a prompt before generating test cases';
+                return;
+            }
+            try {
+                const result = await apiCall('/prompts/test-cases', 'POST', {
+                    title,
+                    details,
+                    prompt: latestPrompt,
+                    num_cases: 5,
+                });
+                document.getElementById('promptResult').innerHTML = `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('promptResult').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        async function validateGeneratedPrompt() {
+            const latestPrompt = PROMPT_HISTORY[0]?.prompt || '';
+            if (!latestPrompt) {
+                document.getElementById('promptResult').innerHTML = 'Error: Generate a prompt before validating';
+                return;
+            }
+            try {
+                const result = await apiCall('/prompts/validate', 'POST', {
+                    prompt: latestPrompt,
+                });
+                document.getElementById('promptResult').innerHTML = `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('promptResult').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        function loadPromptHistory() {
+            const list = document.getElementById('promptHistoryList');
+            if (!list) return;
+            if (!PROMPT_HISTORY.length) {
+                list.innerHTML = 'No prompts generated yet.';
+                return;
+            }
+            list.innerHTML = '<table><tr><th>Created</th><th>Title</th><th>Prompt Preview</th><th>Actions</th></tr>' +
+                PROMPT_HISTORY.map((item, idx) => `<tr>
+                    <td>${_formatTimestamp(item.created_at)}</td>
+                    <td>${_escapeHtml(item.title)}</td>
+                    <td>${_escapeHtml(String(item.prompt || '').slice(0, 140))}</td>
+                    <td><button class="btn-small" onclick="showPromptHistoryItem(${idx})">View</button></td>
+                </tr>`).join('') + '</table>';
+        }
+
+        async function loadExpertPromptCatalog() {
+            try {
+                const payload = await apiCall('/experts');
+                const experts = payload.experts || [];
+                const detailRows = [];
+                for (const e of experts) {
+                    const d = await apiCall(`/experts/${e.id}`);
+                    EXPERT_DETAILS_BY_ID[String(e.id)] = d;
+                    detailRows.push(d);
+                }
+                EXPERT_PROMPT_CATALOG = detailRows;
+                renderExpertPromptCatalog();
+            } catch (e) {
+                document.getElementById('expertPromptCatalog').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        function renderExpertPromptCatalog() {
+            const list = document.getElementById('expertPromptCatalog');
+            if (!list) return;
+            if (!EXPERT_PROMPT_CATALOG.length) {
+                list.innerHTML = 'No expert prompts loaded.';
+                return;
+            }
+            const filter = (document.getElementById('promptExpertFilter')?.value || '').trim().toLowerCase();
+            const rows = EXPERT_PROMPT_CATALOG.filter((e) => {
+                if (!filter) return true;
+                return `${e.name || ''} ${e.title || ''}`.toLowerCase().includes(filter);
+            });
+            list.innerHTML = '<table><tr><th>ID</th><th>Name</th><th>Title</th><th>Prompt Template</th><th>Actions</th></tr>' +
+                rows.map((e) => `<tr>
+                    <td>${e.id}</td>
+                    <td>${_escapeHtml(e.name || '')}</td>
+                    <td>${_escapeHtml(e.title || '')}</td>
+                    <td><pre>${_escapeHtml(String(e.prompt_template || '').slice(0, 600))}</pre></td>
+                    <td>
+                        <button class="btn-small" onclick="editPromptForExpert(${e.id})">Edit</button>
+                        <button class="btn-small" onclick="copyPromptToGenerator(${e.id})">Use in Generator</button>
+                    </td>
+                </tr>`).join('') + '</table>';
+        }
+
+        function copyPromptToGenerator(expertId) {
+            const expert = EXPERT_DETAILS_BY_ID[String(expertId)];
+            if (!expert) return;
+            document.getElementById('promptTitle').value = expert.title || expert.name || '';
+            document.getElementById('promptDetails').value = expert.description || '';
+            document.getElementById('promptResult').innerHTML = `<pre>${_jsonPretty({
+                expert_id: expert.id,
+                current_prompt_template: expert.prompt_template || ''
+            })}</pre>`;
+        }
+
+        function editPromptForExpert(expertId) {
+            const expert = EXPERT_DETAILS_BY_ID[String(expertId)];
+            if (!expert) return;
+            document.getElementById('promptTitle').value = expert.title || expert.name || '';
+            document.getElementById('promptDetails').value = expert.prompt_template || '';
+            document.getElementById('promptResult').innerHTML =
+                `<div class="warning">Editing prompt template for expert ${expert.id}: ${_escapeHtml(expert.name || '')}</div>`;
+            document.getElementById('promptResult').dataset.editExpertId = String(expert.id);
+        }
+
+        async function savePromptToExpert() {
+            const expertId = parseInt(document.getElementById('promptResult')?.dataset?.editExpertId || '', 10);
+            if (!Number.isInteger(expertId) || expertId <= 0) {
+                document.getElementById('promptResult').innerHTML = 'Error: Select an expert prompt row first (Edit).';
+                return;
+            }
+            const newPrompt = (document.getElementById('promptDetails')?.value || '').trim();
+            if (!newPrompt) {
+                document.getElementById('promptResult').innerHTML = 'Error: Prompt template cannot be empty.';
+                return;
+            }
+            try {
+                const result = await apiCall(`/experts/${expertId}`, 'PUT', { prompt_template: newPrompt });
+                document.getElementById('promptResult').innerHTML = `<pre>${_jsonPretty(result)}</pre>`;
+                await loadExpertPromptCatalog();
+                await loadExperts();
+            } catch (e) {
+                document.getElementById('promptResult').innerHTML = `Error: ${e.message}`;
+            }
+        }
+
+        function showPromptHistoryItem(index) {
+            const item = PROMPT_HISTORY[index];
+            if (!item) return;
+            document.getElementById('promptResult').innerHTML = `<pre>${JSON.stringify(item.result || item, null, 2)}</pre>`;
+            document.getElementById('promptTitle').value = item.title || '';
+            document.getElementById('promptDetails').value = item.details || '';
+        }
+
+        async function runTestSuite() {
+            const channelId = document.getElementById('testChannelId').value;
+            if (!channelId) {
+                document.getElementById('testResults').innerHTML = 'Error: Please enter channel ID';
+                return;
+            }
+            
+            try {
+                const result = await apiCall('/testing/expert-suite', 'POST', { channel_id: parseInt(channelId) });
+                document.getElementById('testResults').innerHTML = `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+            } catch (e) {
+                document.getElementById('testResults').innerHTML = 'Error: ' + e.message;
+            }
+        }
+
+        // Initialize
+        document.getElementById('chatInput').addEventListener('keypress', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        document.getElementById('channelSelect').addEventListener('change', async () => {
+            document.getElementById('chatMessages').innerHTML = '';
+            await loadSessionsForChannel();
+        });
+
+        async function initWebUI() {
+            try {
+                const raw = localStorage.getItem('expert_ui_prompt_history');
+                PROMPT_HISTORY = raw ? JSON.parse(raw) : [];
+            } catch (_) {
+                PROMPT_HISTORY = [];
+            }
+            loadPromptHistory();
+            const auth = await refreshAuthStatus();
+            applyAuthState(auth);
+            if (!auth.authenticated) {
+                return;
+            }
+            apiCall('/health').then(() => {
+                document.getElementById('apiStatus').textContent = '●';
+                document.getElementById('apiStatus').style.color = 'var(--success)';
+            }).catch(() => {
+                document.getElementById('apiStatus').textContent = '●';
+                document.getElementById('apiStatus').style.color = 'var(--error)';
+            });
+            loadChannels();
+        }
+
+        initWebUI();
+    </script>
+</body>
+</html>
