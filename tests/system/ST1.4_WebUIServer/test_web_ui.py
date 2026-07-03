@@ -234,7 +234,7 @@ def test_web_login_route_serves_spa_shell(web_client):
 def test_web_login_rejects_invalid_credentials(web_client):
     response = web_client.post(
         f"{web_client.base_url}/web/auth/login",
-        json={"username": "invalid-user", "password": "invalid-password"},
+        json={"username": "invalid-user", "password": "<password>"},
         timeout=web_client.timeout_seconds,
     )
     assert response.status_code in {401, 403}, response.text

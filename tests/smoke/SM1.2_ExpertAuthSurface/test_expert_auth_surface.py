@@ -107,7 +107,7 @@ def test_t3_group_bound_api_key_cascades_with_membership(db_session) -> None:
     user = UserManager(db_session).create_user(
         username="w28a743_cascade_user",
         email="w28a743_cascade_user@example.invalid",
-        password="W28a743-cascade-password!",
+        password="<password>",
         role="viewer",
     )
     group = GroupManager(db_session).create_group(

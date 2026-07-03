@@ -11,11 +11,11 @@ CLOUD_DOG__EXPERT__A2A_SERVER__HOST=127.0.0.1
 CLOUD_DOG__EXPERT__A2A_SERVER__PORT=28082
 
 # Ensure bootstrap auth key/user matches Docker IT tests.
-TEST_API_KEY=12345678
-CLOUD_DOG__EXPERT__TEST__API_KEY=12345678
+TEST_API_KEY=<api-key>
+CLOUD_DOG__EXPERT__TEST__API_KEY=<api-key>
 CLOUD_DOG__EXPERT__TEST__USER__USERNAME=admin
 CLOUD_DOG__EXPERT__TEST__USER__EMAIL=admin@cloud-dog.net
-CLOUD_DOG__EXPERT__TEST__USER__PASSWORD=OrangeRiverTable
+CLOUD_DOG__EXPERT__TEST__USER__PASSWORD=<password>
 CLOUD_DOG__EXPERT__TEST__USER__DISPLAY_NAME=Admin
 
 # Force vector store profile used by IT2.37 to the local Docker chroma service.

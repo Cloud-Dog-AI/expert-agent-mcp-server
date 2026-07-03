@@ -52,7 +52,7 @@ async def _fake_generate(self, messages, temperature, max_tokens, **kwargs):
 def cache_client(db_session, monkeypatch):
     monkeypatch.setattr("src.core.llm.manager.LLMManager.initialize", _fake_initialize)
     monkeypatch.setattr("src.core.llm.manager.LLMManager.generate", _fake_generate)
-    user, api_key = seed_admin(db_session, api_key="cache-integration-key")
+    user, api_key = seed_admin(db_session, api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     init_cache(CacheConfig(enabled=True, backend="memory", ttl_seconds=3600, max_entries=1000))
     client.post("/cache/flush")

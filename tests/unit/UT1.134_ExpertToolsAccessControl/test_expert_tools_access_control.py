@@ -128,7 +128,7 @@ def test_executor_dispatches_expert_bound_grounding_tools(db_session, monkeypatc
     user = UserManager(db_session).create_user(
         username="ea4_user",
         email="ea4_user@example.com",
-        password="Password123!",
+        password="<password>",
         role="admin",
     )
     expert = ExpertConfig(
@@ -211,7 +211,7 @@ def test_executor_honours_per_expert_llm_model(db_session):
     UserManager(db_session).create_user(
         username="ea11_user",
         email="ea11_user@example.com",
-        password="Password123!",
+        password="<password>",
         role="admin",
     )
     expert = ExpertConfig(

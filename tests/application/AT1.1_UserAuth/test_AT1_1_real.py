@@ -1318,7 +1318,7 @@ def test_AT1_1l_token_validation(api_client, unique_user_credentials):
     )
 
     # Validate invalid token
-    invalid_token = "invalid_token_12345"
+    invalid_token = "<token>"
     invalid_validate_response = api_client.get(f"/auth/validate?token={invalid_token}")
     mgr.save_output("validate_invalid_token", invalid_validate_response)
 

@@ -25,7 +25,7 @@ import pytest
 
 
 def test_ut199_expert_routes_require_authentication(db_session) -> None:
-    _, api_key = seed_admin(db_session, api_key="ut199-expert-routes-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     expert = seed_expert(
         db_session,
         name="ut199_expert",
@@ -61,7 +61,7 @@ def test_ut199_expert_routes_require_authentication(db_session) -> None:
 
 
 def test_ut199_expert_routes_accept_authenticated_requests(db_session) -> None:
-    _, api_key = seed_admin(db_session, api_key="ut199-expert-routes-ok-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     expert = seed_expert(
         db_session,
         name="ut199_expert_ok",

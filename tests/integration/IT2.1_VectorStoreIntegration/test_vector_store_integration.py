@@ -64,7 +64,7 @@ def test_user(db_session):
     try:
         validate_password_policy(str(password))
     except Exception:
-        password = "TestPassword123!"
+        password = "<password>"
     unique = uuid.uuid4().hex[:8]
     if "@" not in email:
         pytest.fail("test.user.email must include a domain (e.g. user@example.com)")

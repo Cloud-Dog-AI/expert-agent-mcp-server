@@ -364,7 +364,7 @@ class ConnectionManager:
             "experts": "Expert configuration events",
             "users": "User configuration events",
             "groups": "Group configuration events",
-            "api_keys": "API key configuration events",
+            "api_keys": "<api-key>",
             "jobs": "Job status events",
             "system": "System status events",
         }

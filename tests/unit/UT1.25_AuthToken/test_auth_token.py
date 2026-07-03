@@ -72,7 +72,7 @@ def test_token_validation_valid(token_manager):
 
 def test_token_validation_invalid(token_manager):
     """Test validation of invalid token."""
-    invalid_token = "invalid_token_string"
+    invalid_token = "<token>"
 
     is_valid, user_id = token_manager.validate_token(invalid_token)
 

@@ -25,7 +25,7 @@ def test_transactional_executor_returns_structured_response(db_session, monkeypa
     user = UserManager(db_session).create_user(
         username='txn_user',
         email='txn_user@example.com',
-        password='Password123!',
+        password='<password>',
         role='admin',
     )
     expert = ExpertConfig(
@@ -82,7 +82,7 @@ def test_transactional_interpolates_prior_service_results(db_session, monkeypatc
     user = UserManager(db_session).create_user(
         username='txn_chain_user',
         email='txn_chain_user@example.com',
-        password='Password123!',
+        password='<password>',
         role='admin',
     )
     expert = ExpertConfig(

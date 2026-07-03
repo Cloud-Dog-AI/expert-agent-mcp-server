@@ -64,7 +64,7 @@ def test_verify_password_correct():
 def test_verify_password_incorrect():
     """Test password verification with incorrect password."""
     password = "test_password_123"
-    wrong_password = "wrong_password"
+    wrong_password = "<password>"
     hashed = hash_password(password)
 
     assert verify_password(wrong_password, hashed) is False
@@ -103,7 +103,7 @@ def test_verify_password_empty():
 
 def test_verify_password_special_characters():
     """Test password hashing with special characters."""
-    password = "P@ssw0rd!@#$%^&*()"
+    password = "<password>"
     hashed = hash_password(password)
 
     assert verify_password(password, hashed) is True
@@ -116,7 +116,7 @@ def test_verify_password_special_characters():
 
 def test_verify_password_unicode():
     """Test password hashing with unicode characters."""
-    password = "测试密码123"
+    password = "<password>"
     hashed = hash_password(password)
 
     assert verify_password(password, hashed) is True

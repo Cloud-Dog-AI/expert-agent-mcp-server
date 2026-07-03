@@ -109,7 +109,7 @@ async def setup_postgres():
             "vector_stores_config.pgvector._DEFAULT_.host", "db2.db.example.com"
         )
         port = get_config("vector_stores_config.pgvector._DEFAULT_.port", 5432)
-        root_password = "PadnigUdter8"  # Root password from user
+        root_password = "<password>"  # Root password from user
 
         # Connect as postgres user to create database and user
         try:
@@ -206,7 +206,7 @@ async def setup_mariadb():
 
         host = get_config("database.mariadb.host", "db1.db.example.com")
         port = get_config("database.mariadb.port", 3306)
-        root_password = "PadnigUdter8"  # Root password from user
+        root_password = "<password>"  # Root password from user
 
         # Connect as root to create database and user
         try:

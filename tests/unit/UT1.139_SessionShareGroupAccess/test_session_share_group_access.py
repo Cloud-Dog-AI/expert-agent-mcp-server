@@ -53,7 +53,7 @@ def _make_user(db_session, role: str = "user"):
     return UserManager(db_session).create_user(
         username=f"ut139_{role}_{unique}",
         email=f"ut139_{role}_{unique}@example.com",
-        password="Password123!",
+        password="<password>",
         role=role,
         enabled=True,
     )

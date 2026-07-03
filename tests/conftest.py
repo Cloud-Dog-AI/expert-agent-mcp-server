@@ -606,7 +606,7 @@ def test_env_file(request, sequential_test_session_lock):
     test_user_map = {
         "TEST_USER_USERNAME": "CLOUD_DOG__EXPERT__TEST__USER__USERNAME",
         "TEST_USER_EMAIL": "CLOUD_DOG__EXPERT__TEST__USER__EMAIL",
-        "TEST_USER_PASSWORD": "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD",
+        "TEST_USER_PASSWORD": "<password>",
         "TEST_USER_DISPLAY_NAME": "CLOUD_DOG__EXPERT__TEST__USER__DISPLAY_NAME",
     }
 
@@ -1169,12 +1169,12 @@ def normalize_placeholder_llm_test_values():
         "CLOUD_DOG__EXPERT__TEST__AT1_12__SCENARIO_2__MAX_TOKENS": "256",
         "CLOUD_DOG__EXPERT__TEST__AT1_12__SCENARIO_3__MAX_TOKENS": "256",
         "CLOUD_DOG__EXPERT__TEST__AT1_12__SCENARIO_4__MAX_TOKENS": "256",
-        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_NEW": "TestSecretValue2!",
-        "TEST_USER_PASSWORD_NEW": "TestSecretValue2!",
-        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_RESET": "TestSecretValue3!",
-        "TEST_USER_PASSWORD_RESET": "TestSecretValue3!",
-        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_WEAK": "short",
-        "TEST_USER_PASSWORD_WEAK": "short",
+        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_NEW": "<password>",
+        "TEST_USER_PASSWORD_NEW": "<password>",
+        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_RESET": "<password>",
+        "TEST_USER_PASSWORD_RESET": "<password>",
+        "CLOUD_DOG__EXPERT__TEST__USER__PASSWORD_WEAK": "<password>",
+        "TEST_USER_PASSWORD_WEAK": "<password>",
     }
     previous: dict[str, str | None] = {}
     changed = False

@@ -43,7 +43,7 @@ def admin_auth_context(db_session):
     user = UserManager(db_session).create_user(
         username="ut101_admin",
         email="ut101_admin@example.com",
-        password="AdminPass123!",
+        password="<password>",
         role="admin",
     )
     result = APIKeyManager(db_session).generate_key(user_id=user.id, name="ut101-admin-key")
@@ -107,7 +107,7 @@ def test_admin_user_and_api_key_tools_require_admin(monkeypatch, db_session, mcp
     user = UserManager(db_session).create_user(
         username="ut101_user",
         email="ut101_user@example.com",
-        password="UserPass123!",
+        password="<password>",
         role="user",
     )
     key = APIKeyManager(db_session).generate_key(user_id=user.id, name="ut101-user-key")

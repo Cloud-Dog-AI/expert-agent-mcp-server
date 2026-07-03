@@ -65,7 +65,7 @@ def _make_user_and_expert(db_session):
     user = UserManager(db_session).create_user(
         username="audit_user",
         email="audit_user@example.com",
-        password="Password123!",
+        password="<password>",
         role="admin",
     )
     expert = ExpertConfig(

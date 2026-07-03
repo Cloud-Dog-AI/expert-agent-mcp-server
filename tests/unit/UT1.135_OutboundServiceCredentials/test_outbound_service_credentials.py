@@ -80,7 +80,7 @@ def test_config_key_resolved_via_get_config(monkeypatch):
 @pytest.mark.fast
 def test_service_name_convention_resolves_filemcpserver0_key(monkeypatch):
     # Mirrors preprod: service_credentials.filemcpserver0.api_key <- ${vault.dev.services.filemcpserver0.api_key}
-    resolved = {"service_credentials.filemcpserver0.api_key": "cdfm0_vault_resolved"}
+    resolved = {"service_credentials.filemcpserver0.api_key": "<api-key>"}
     monkeypatch.setattr(
         "src.core.service.composition.get_config", lambda k: resolved.get(k)
     )
@@ -95,7 +95,7 @@ def test_service_name_convention_resolves_filemcpserver0_key(monkeypatch):
 @pytest.mark.pure
 @pytest.mark.fast
 def test_auth_headers_injects_resolved_key(db_session, monkeypatch):
-    resolved = {"service_credentials.filemcpserver0.api_key": "cdfm0_vault_resolved"}
+    resolved = {"service_credentials.filemcpserver0.api_key": "<api-key>"}
     monkeypatch.setattr(
         "src.core.service.composition.get_config", lambda k: resolved.get(k)
     )

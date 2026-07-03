@@ -48,7 +48,7 @@ def _seed_user_with_key(db_session, role: str, api_key: str):
     user = UserManager(db_session).create_user(
         username=f"ut140_{role}_{unique}",
         email=f"ut140_{role}_{unique}@example.com",
-        password="Password123!",
+        password="<password>",
         role=role,
         enabled=True,
     )
@@ -78,7 +78,7 @@ _FILE = {"uploaded_file": ("ut140.png", b"\x89PNG\r\n\x1a\n" + b"0" * 32, "image
 @pytest.mark.api
 @pytest.mark.req("FR-008")
 def test_upload_admin_passes_auth_gate(db_session):
-    _, api_key = seed_admin(db_session, api_key="ut140-admin-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     try:
         resp = client.post("/files/upload", files=_FILE)
@@ -94,7 +94,7 @@ def test_upload_admin_passes_auth_gate(db_session):
 @pytest.mark.negative
 @pytest.mark.req("FR-008")
 def test_upload_non_admin_is_forbidden(db_session):
-    _, api_key = _seed_user_with_key(db_session, role="user", api_key="ut140-user-key")
+    _, api_key = _seed_user_with_key(db_session, role="user", api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     try:
         resp = client.post("/files/upload", files=_FILE)
@@ -108,7 +108,7 @@ def test_upload_non_admin_is_forbidden(db_session):
 @pytest.mark.negative
 @pytest.mark.req("FR-008")
 def test_upload_anonymous_is_unauthorized(db_session):
-    _, api_key = seed_admin(db_session, api_key="ut140-anon-upload-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     client.headers.pop("X-API-Key", None)
     try:
@@ -123,7 +123,7 @@ def test_upload_anonymous_is_unauthorized(db_session):
 @pytest.mark.negative
 @pytest.mark.req("FR-023")
 def test_feedback_anonymous_is_unauthorized(db_session):
-    _, api_key = seed_admin(db_session, api_key="ut140-anon-feedback-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     client.headers.pop("X-API-Key", None)
     try:
@@ -137,7 +137,7 @@ def test_feedback_anonymous_is_unauthorized(db_session):
 @pytest.mark.api
 @pytest.mark.req("FR-023")
 def test_feedback_authenticated_reaches_handler(db_session):
-    _, api_key = seed_admin(db_session, api_key="ut140-feedback-key")
+    _, api_key = seed_admin(db_session, api_key="<api-key>")
     client = build_api_client(db_session, api_key=api_key)
     try:
         # Authenticated caller clears the gate; a non-existent job is 404 (not a

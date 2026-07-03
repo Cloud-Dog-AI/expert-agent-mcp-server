@@ -15,7 +15,7 @@ def test_delegate_creates_child_session_and_tree(db_session):
     user = UserManager(db_session).create_user(
         username='delegate_user',
         email='delegate_user@example.com',
-        password='Password123!',
+        password='<password>',
     )
     parent = ExpertConfig(
         name='delegate_parent',
@@ -61,7 +61,7 @@ def test_delegate_blocks_self_referencing_loops(db_session):
     user = UserManager(db_session).create_user(
         username='loop_user',
         email='loop_user@example.com',
-        password='Password123!',
+        password='<password>',
     )
     expert = ExpertConfig(
         name='loop_expert',

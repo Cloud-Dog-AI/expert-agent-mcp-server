@@ -68,7 +68,7 @@ def _api_docs_payload() -> Dict[str, Any]:
                 "body": {
                     "username": "user1",
                     "email": "user1@example.com",
-                    "password": "secure_password",
+                    "password": "<password>",
                 },
             },
             "create_expert": {

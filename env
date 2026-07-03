@@ -56,7 +56,7 @@ CLOUD_DOG__EXPERT__LOG__PII_REDACTION=true
 # Test User Configuration (generic, non-secret defaults)
 TEST_USER_USERNAME=testuser
 TEST_USER_EMAIL=testuser@example.com
-TEST_USER_PASSWORD=TestPassword123!
+TEST_USER_PASSWORD=<password>
 
 # Test Group Configuration
 TEST_GROUP_NAME_PREFIX=test_group
