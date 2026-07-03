@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-18
@@ -536,7 +536,7 @@ ExpertConfig gains: is_controller (bool), default_execution_mode (enum),
 
 ## Recovered domain content — `archive/2026-06-12/AGENT_RULES.md` (27 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/AGENT_RULES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/AGENT_RULES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 ## Agent rules (build/test automation)
 
@@ -570,7 +570,7 @@ Automation MUST use `server_control.sh` to start/stop services. Do **not** start
 
 ## Recovered domain content — `archive/2026-06-12/FOLDER_STRUCTURE.md` (17 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/FOLDER_STRUCTURE.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/FOLDER_STRUCTURE.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 ## Folder structure
 
@@ -594,7 +594,7 @@ Notes:
 
 ## Recovered domain content — `archive/2026-06-12/NEXT_STEPS.md` (300 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/NEXT_STEPS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/NEXT_STEPS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Next Steps Plan
 
@@ -901,7 +901,7 @@ _This section carries forward the full content of the archived predecessor doc v
 
 ## Recovered domain content — `archive/2026-06-12/NEXT_STEPS_PLAN.md` (310 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/NEXT_STEPS_PLAN.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/NEXT_STEPS_PLAN.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Next Steps Plan - Updated
 
@@ -1218,7 +1218,7 @@ _This section carries forward the full content of the archived predecessor doc v
 
 ## Recovered domain content — `archive/2026-06-12/SUMMARY.md` (270 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/SUMMARY.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/SUMMARY.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Expert Agent MCP Server - Project Summary
 
@@ -1346,7 +1346,7 @@ expert-agent-mcp-server/
 - CI/CD integration plans
 
 ### Task Management
-[TASKS.md](TASKS.md) tracks development progress with clearly numbered tasks and improved structure:
+TASKS.md tracks development progress with clearly numbered tasks and improved structure:
 - High, medium, and low priority tasks (T001-T086)
 - Task dependencies and relationships
 - Component-specific task breakdowns
@@ -1390,7 +1390,7 @@ The service follows the Cloud Dog configuration hierarchy:
 4. `default.yaml`
 
 Key configuration files:
-- [default.yaml](../default.yaml) - Base configuration
+- [defaults.yaml](../defaults.yaml) - Base configuration
 - [env.example](../env.example) - Environment variable examples
 - [requirements.txt](../requirements.txt) - Python dependencies
 
@@ -1402,7 +1402,7 @@ The `private/` folder contains confidential settings used during build and testi
 - API keys and tokens
 - Other confidential configuration files
 
-**Important**: This folder and its contents should never be committed to git as they contain sensitive information. See [private/README.md](../private/README.md) for more details.
+**Important**: This folder and its contents should never be committed to git as they contain sensitive information. See [README.md](../README.md) for more details.
 
 ## Service Management
 
@@ -1489,4 +1489,4 @@ make dev
 9. Web UI development
 10. Comprehensive testing
 
-Refer to [TASKS.md](TASKS.md) for detailed task breakdown and [TESTS.md](TESTS.md) for testing roadmap. Each task is mapped to specific test cases to ensure comprehensive coverage.
+Refer to TASKS.md for detailed task breakdown and [TESTS.md](TESTS.md) for testing roadmap. Each task is mapped to specific test cases to ensure comprehensive coverage.

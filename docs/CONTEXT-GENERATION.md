@@ -6,7 +6,7 @@ registry: service
 required: conditional
 when-applicable: "service builds LLM prompts from data"
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-12

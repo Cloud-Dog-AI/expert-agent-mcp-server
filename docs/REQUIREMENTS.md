@@ -131,7 +131,7 @@ async with get_llm_client() as client:
 ### SV1.1: System Overview
 An intelligent conversational agent platform composed of four servers (API/REST, MCP, A2A, Web UI/Admin). It provides access to one or more LLMs with persistent session history, contextual awareness, and vector database integration for knowledge retrieval and storage. The system supports multiple expert configurations with different LLMs, parameters, and prompts to exhibit different behaviors and expertise domains.
 
-**Alignment**: [ARCH:OV1.1](ARCHITECTURE.md#ov11), [TASK:T001](TASKS.md#t001)
+**Alignment**: [ARCH:OV1.1](ARCHITECTURE.md#ov11), TASK:T001
 
 ### SV1.2: In-Scope (v1)
 - Four-server architecture: API/REST, MCP, A2A, Web UI/Admin
@@ -148,7 +148,7 @@ An intelligent conversational agent platform composed of four servers (API/REST,
 - SQLite3 for development/testing with MySQL/PostgreSQL support for production
 - Redis/Valkey for queue management with SQL transactional fallback
 
-**Alignment**: [ARCH:SA1.1](ARCHITECTURE.md#sa11), [TASK:T001](TASKS.md#t001)
+**Alignment**: [ARCH:SA1.1](ARCHITECTURE.md#sa11), TASK:T001
 
 ### SV1.3: Out-of-Scope (v1)
 - Multimodal support (images, files) - planned for v1.1
@@ -164,32 +164,32 @@ An intelligent conversational agent platform composed of four servers (API/REST,
 ### BO1.1: Intelligent Conversations
 Provide intelligent, context-aware conversations with persistent session history.
 
-**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), [TASK:T022](TASKS.md#t022), [TEST:AT1.1](TESTS.md#at11)
+**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), TASK:T022, [TEST:AT1.1](TESTS.md#at11)
 
 ### BO1.2: Multiple Expert Configurations
 Support multiple expert configurations with customizable LLMs, parameters, and prompts to exhibit different behaviors and expertise domains.
 
-**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T007](TASKS.md#t007), [TEST:AT1.2](TESTS.md#at12)
+**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T007, [TEST:AT1.2](TESTS.md#at12)
 
 ### BO1.3: Vector Database Integration
 Provide vector database integration for knowledge retrieval, storage, and contextual enhancement.
 
-**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T014](TASKS.md#t014), [TEST:IT2.1](TESTS.md#it21)
+**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T014, [TEST:IT2.1](TESTS.md#it21)
 
 ### BO1.4: Operational Controls
 Provide clear operational controls (rate limits, circuit breakers, TTL, retries, session limits).
 
-**Alignment**: [ARCH:CP1.1](ARCHITECTURE.md#cp11), [TASK:T027](TASKS.md#t027), [TEST:ST1.1](TESTS.md#st11)
+**Alignment**: [ARCH:CP1.1](ARCHITECTURE.md#cp11), TASK:T027, [TEST:ST1.1](TESTS.md#st11)
 
 ### BO1.5: Admin Experience
 Deliver first-class admin experience in Web UI with configuration management.
 
-**Alignment**: [ARCH:CC1.2](ARCHITECTURE.md#cc12), [TASK:T030](TASKS.md#t030), [TEST:AT1.3](TESTS.md#at13)
+**Alignment**: [ARCH:CC1.2](ARCHITECTURE.md#cc12), TASK:T030, [TEST:AT1.3](TESTS.md#at13)
 
 ### BO1.6: Code Reuse
 Strong reuse of existing Notification Agent and SQL Agent MCP project patterns.
 
-**Alignment**: [ARCH:DO1.1](ARCHITECTURE.md#do11), [TASK:T001](TASKS.md#t001)
+**Alignment**: [ARCH:DO1.1](ARCHITECTURE.md#do11), TASK:T001
 
 ---
 
@@ -198,22 +198,22 @@ Strong reuse of existing Notification Agent and SQL Agent MCP project patterns.
 ### BR1.1: Multi-Expert Support
 System shall support multiple expert configurations with distinct LLM settings, prompts, and parameters.
 
-**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T007](TASKS.md#t007), [TEST:IT2.2](TESTS.md#it22)
+**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T007, [TEST:IT2.2](TESTS.md#it22)
 
 ### BR1.2: User Management
 System shall provide comprehensive user management including local users, external identity providers (Google, LinkedIn, Keycloak), groups, and preferences.
 
-**Alignment**: [ARCH:CC5.1](ARCHITECTURE.md#cc51), [TASK:T005](TASKS.md#t005), [TEST:AT1.4](TESTS.md#at14)
+**Alignment**: [ARCH:CC5.1](ARCHITECTURE.md#cc51), TASK:T005, [TEST:AT1.4](TESTS.md#at14)
 
 ### BR1.3: Session Management
 System shall provide persistent session history with configurable retention policies and context window management.
 
-**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), [TASK:T022](TASKS.md#t022), [TEST:AT1.5](TESTS.md#at15)
+**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), TASK:T022, [TEST:AT1.5](TESTS.md#at15)
 
 ### BR1.4: Vector Database Integration
 System shall support multiple vector database providers (Chroma, Weaviate, Qdrant, OpenSearch, Elastic, PGVector) with lifecycle management.
 
-**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T014](TASKS.md#t014), [TEST:IT2.3](TESTS.md#it23)
+**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T014, [TEST:IT2.3](TESTS.md#it23)
 
 ---
 
@@ -233,7 +233,7 @@ System shall support expert configurations with title, description, scope, LLM s
   - `POST /prompts/generate` (generate example prompt)
   - `POST /validation/prompt` (LLM-backed prompt validation against requirements)
 
-**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T007](TASKS.md#t007), [TASK:T012](TASKS.md#t012), [TEST:IT2.4](TESTS.md#it24)
+**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T007, TASK:T012, [TEST:IT2.4](TESTS.md#it24)
 
 ### FR1.2: Conversation Management
 System shall provide persistent session history with configurable retention periods. Shared or personal history contexts based on authentication. Context window management with automatic summarization for long conversations. Real-time conversation state synchronization across distributed servers. Conversation tagging and categorization for organization. All logs/history access must be separated by users/groups - users only see their stuff or stuff they are allowed to see. Option to remove PII from session, history, returned results, or audit based on use case. Controls for maximum number of concurrent sessions per user/group. Session queuing and resource management when concurrency limits are reached. Graceful handling of session limits with appropriate user notifications.
@@ -243,27 +243,27 @@ System shall provide persistent session history with configurable retention peri
 - Support queuing when limits are exceeded (`session.queue_enabled`)
 - Ensure high-frequency requests do not produce 5xx and return deterministic queued/limited responses
 
-**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), [TASK:T022](TASKS.md#t022), [TASK:T027](TASKS.md#t027), [TEST:IT2.5](TESTS.md#it25)
+**Alignment**: [ARCH:CC2.1](ARCHITECTURE.md#cc21), TASK:T022, TASK:T027, [TEST:IT2.5](TESTS.md#it25)
 
 ### FR1.3: Vector Database Integration
 System shall support Chroma (dev/test), Weaviate, Qdrant, OpenSearch, Elastic, PGVector. Map vector databases to specific configurations/sessions. Lifecycle management: purge after time, compress/consolidate after time. Indexing options exposing all provider-specific parameters and metadata fields. Search, filter, and removal of threads/context within vector stores. Access control for read/write permissions on vector stores. Use collections to separate each vector instance across groups. Ensure no cross-talk/data between different groups/databases on the same host. Vector database will use Chroma locally by default/dev/test and be configurable for all other providers.
 
-**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T014](TASKS.md#t014), [TASK:T019](TASKS.md#t019), [TEST:IT2.6](TESTS.md#it26)
+**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T014, TASK:T019, [TEST:IT2.6](TESTS.md#it26)
 
 ### FR1.4: Knowledge Management
 System shall provide historical context used to enhance learning and responses. Knowledge base ingestion from various sources (documents, APIs, other agents). Automated knowledge consolidation and optimization. Versioning and rollback capabilities for knowledge bases. Removal of unwanted/bad information based on keywords, times, channels, etc.
 
-**Alignment**: [ARCH:CC4.2](ARCHITECTURE.md#cc42), [TASK:T017](TASKS.md#t017), [TASK:T018](TASKS.md#t018), [TEST:AT1.6](TESTS.md#at16)
+**Alignment**: [ARCH:CC4.2](ARCHITECTURE.md#cc42), TASK:T017, TASK:T018, [TEST:AT1.6](TESTS.md#at16)
 
 ### FR1.5: User & Group Management
 System shall provide local user authentication (username/password/email) with admin roles. External authentication providers (Google, LinkedIn, etc.). SAML/OpenID integration with identity providers (Keycloak, etc.). Group membership with role-based access control. Group administrators who can manage group memberships. Unauthorized user access with per-configuration read/write permissions. Group authentication read from mapped fields in the identity provider.
 
-**Alignment**: [ARCH:CC5.1](ARCHITECTURE.md#cc51), [TASK:T005](TASKS.md#t005), [TASK:T006](TASKS.md#t006), [TEST:AT1.7](TESTS.md#at17)
+**Alignment**: [ARCH:CC5.1](ARCHITECTURE.md#cc51), TASK:T005, TASK:T006, [TEST:AT1.7](TESTS.md#at17)
 
 ### FR1.6: Access Control & Authorization
 System shall provide configuration access by individual users or groups. Vector store read/write permissions by users or groups. Session history access controls (personal vs shared). Role-based permissions for administration functions. Audit trails for all access and administrative actions.
 
-**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), [TASK:T006](TASKS.md#t006), [TEST:ST1.2](TESTS.md#st12)
+**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), TASK:T006, [TEST:ST1.2](TESTS.md#st12)
 
 ### FR1.7: API & Integration
 System shall provide RESTful API endpoints for all core functionality. MCP tools for agent-to-agent interactions. A2A streaming for real-time events and status updates. Webhook support for external integrations. Natural language commands for conversation initiation and control. Support for both synchronous and asynchronous API calls. Async response handling with callback mechanisms. Long-running operation support with status polling.
@@ -288,7 +288,7 @@ MCP transport and protocol compliance requirements:
    - Session tracking via explicit `session_id` query parameter (recommended)
    - If `session_id` is omitted on `initialize`, server returns a generated session id via `Mcp-Session-Id` response header
 
-**Alignment**: [ARCH:AI1.1](ARCHITECTURE.md#ai11), [ARCH:CC1.1.3](ARCHITECTURE.md#cc113), [TASK:T030](TASKS.md#t030), [TEST:ST1.2](TESTS.md#st12)
+**Alignment**: [ARCH:AI1.1](ARCHITECTURE.md#ai11), [ARCH:CC1.1.3](ARCHITECTURE.md#cc113), TASK:T030, [TEST:ST1.2](TESTS.md#st12)
 
 ### FR1.8: Web UI & Administration
 System shall provide chat interface resembling OpenAI Chat or OpenWebUI. Left sidebar for chat session navigation. Configuration selection per user permissions. Admin panel for user/group management, logs, and service configuration. Customizable UI elements (name, title, logo) via config files. Real-time monitoring dashboards with metrics visualization.
@@ -300,47 +300,47 @@ Web authentication requirements:
 - Logout MUST clear web session and block further proxied API calls until re-authenticated.
 - API key management remains available for admin/programmatic use, but not required for normal Web UI user login.
 
-**Alignment**: [ARCH:CC1.2](ARCHITECTURE.md#cc12), [TASK:T030](TASKS.md#t030), [TEST:AT1.8](TESTS.md#at18)
+**Alignment**: [ARCH:CC1.2](ARCHITECTURE.md#cc12), TASK:T030, [TEST:AT1.8](TESTS.md#at18)
 
 ### FR1.9: Observability & Monitoring
 System shall provide structured logging with redaction of sensitive information. Prometheus metrics exposure for all core services. Health check endpoints for each server component. Performance metrics (response time, throughput, error rates). Resource utilization monitoring (CPU, memory, disk, network).
 
-**Alignment**: [ARCH:MO1.1](ARCHITECTURE.md#mo11), [TASK:T040](TASKS.md#t040), [TEST:ST1.3](TESTS.md#st13)
+**Alignment**: [ARCH:MO1.1](ARCHITECTURE.md#mo11), TASK:T040, [TEST:ST1.3](TESTS.md#st13)
 
 ### FR1.10: Audit & Compliance
 System shall provide comprehensive audit logging of all user interactions. Client details capture (IP, user agent, endpoint accessed). Request/response logging with timestamp and user context. Cryptographic signing of audit entries for non-repudiation. Configurable retention policies for audit logs. GDPR-compliant data export and deletion capabilities. Option to remove PII from audit logs based on use case.
 
-**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), [TASK:T041](TASKS.md#t041), [TEST:ST1.4](TESTS.md#st14)
+**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), TASK:T041, [TEST:ST1.4](TESTS.md#st14)
 
 ### FR1.11: Reliability & Controls
 System shall provide per-user and per-group rate limits (N per minute/hour/day). Circuit breaker: soft/hard error thresholds flip to degraded/unavailable. Backoff with jitter; categorise errors as transient/permanent. TTL expiry transitions pending sessions to expired state. Configurable maximum concurrent session limits per user/group. Resource throttling and queue management for session control. Support for both sync and async processing models.
 
-**Alignment**: [ARCH:CP1.1](ARCHITECTURE.md#cp11), [TASK:T027](TASKS.md#t027), [TASK:T042](TASKS.md#t042), [TEST:ST1.5](TESTS.md#st15)
+**Alignment**: [ARCH:CP1.1](ARCHITECTURE.md#cp11), TASK:T027, TASK:T042, [TEST:ST1.5](TESTS.md#st15)
 
 ### FR1.12: Channel-Based Expert Configurations
 System shall support channel-based expert configurations where each channel represents a specific use case or scenario. Channels shall have distinct LLM settings, parameters, prompts, and tool configurations. History can be defined on a user, channel, or session basis with configurable limitations (e.g., only remember last 3 weeks). History can be shared across different expert channels by session key or user. Each channel can have multiple vector database knowledge bases that augment search. Channels may use rerank models for improved retrieval. Channels may have one or more tools and other agents they can call to resolve queries.
 
-**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T050](TASKS.md#t050), [TEST:AT1.13](TESTS.md#at113)
+**Alignment**: [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T050, [TEST:AT1.13](TESTS.md#at113)
 
 ### FR1.13: Multimedia Processing
 System shall support processing and returning multimedia information including images, audio, and movies in expert conversations. System shall handle file uploads, storage, processing, and return of multimedia content. Support for image analysis, audio transcription, and video processing. Integration with LLM providers that support multimodal inputs (e.g., GPT-4 Vision, Claude with vision).
 
-**Alignment**: [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), [TASK:T051](TASKS.md#t051), [TEST:AT1.105](TESTS.md#at1105)
+**Alignment**: [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), TASK:T051, [TEST:AT1.105](TESTS.md#at1105)
 
 ### FR1.14: Comprehensive Job/Call Logging
 System shall record each session with a full log containing all significant events. For each LLM/Expert call, system shall save a complete job/call record with all information including: prompts sent, responses received, metadata (timestamps, user, channel, session), performance metrics (latency, token counts, costs), vector retrieval context, tool calls made, and error information. All job records shall be searchable, filterable, and downloadable.
 
-**Alignment**: [ARCH:CC7.1](ARCHITECTURE.md#cc71), [TASK:T052](TASKS.md#t052), [TEST:ST1.20](TESTS.md#st120)
+**Alignment**: [ARCH:CC7.1](ARCHITECTURE.md#cc71), TASK:T052, [TEST:ST1.20](TESTS.md#st120)
 
 ### FR1.15: Auto-Prompt Generation
 System shall provide an interface to take an expert description (title, details, context type, expected outcomes) and automatically generate an example prompt and settings that encapsulate the prompt, tool calls (from available set), and configuration recommendations. System shall use LLM validation to check prompt conformity to patterns/requirements. Generated prompts shall include appropriate tool selections based on context type and expected outcomes.
 
-**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), [TASK:T053](TASKS.md#t053), [TEST:AT1.107](TESTS.md#at1107)
+**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), TASK:T053, [TEST:AT1.107](TESTS.md#at1107)
 
 ### FR1.16: Tool & External Service Management
 System shall allow users to add tool definitions to channels. System shall support adding external A2A/MCP services into the system with health checking to verify they are working/responding. Services can be applied to one or more channels to make them available. System shall provide prompt evaluation capabilities to assess if channel prompts need enhancing when new tools/services are added. Tool definitions shall include input/output schemas, authentication requirements, and usage guidelines.
 
-**Alignment**: [ARCH:CC8.1](ARCHITECTURE.md#cc81), [TASK:T054](TASKS.md#t054), [TEST:AT1.110](TESTS.md#at1110)
+**Alignment**: [ARCH:CC8.1](ARCHITECTURE.md#cc81), TASK:T054, [TEST:AT1.110](TESTS.md#at1110)
 
 ### FR1.17: API Key Management
 System shall provide API key management for users and groups. API keys shall provide read and/or write access to channels, logs, and histories. Group admins can manage API keys for their groups. System users can define API keys with appropriate scopes. API keys shall support rotation, expiration, and revocation. Keys shall be securely stored and masked in logs.
@@ -369,12 +369,12 @@ System shall provide API key management for users and groups. API keys shall pro
 - Revoked or expired keys are rejected immediately.
 - Audit trail contains all key events with masked identifiers.
 
-**Alignment**: [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), [TASK:T055](TASKS.md#t055), [TEST:ST1.31](TESTS.md#st131), [TEST:IT2.24](TESTS.md#it224), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), TASK:T055, [TEST:ST1.31](TESTS.md#st131), [TEST:IT2.24](TESTS.md#it224), [TEST:AT1.94](TESTS.md#at194)
 
 ### FR1.18: OpenRouter Integration
 System shall support creating Ollama and OpenAI-compatible channels/Experts using an OpenRouter.ai endpoint. System shall handle OpenRouter authentication, model selection, and routing. Support for all OpenRouter-compatible models with proper parameter mapping.
 
-**Alignment**: [ARCH:IP1.1.4](ARCHITECTURE.md#ip114), [TASK:T056](TASKS.md#t056), [TEST:IT2.8](TESTS.md#it28)
+**Alignment**: [ARCH:IP1.1.4](ARCHITECTURE.md#ip114), TASK:T056, [TEST:IT2.8](TESTS.md#it28)
 
 ### FR1.19: External Service Registry
 System shall maintain a registry of known external MCP and A2A services. Users can select services from the registry, add authentication keys if necessary, apply group/user access rights, confirm history/context memory settings, verify endpoints work, and add/use services in expert channels they have permission to modify. Service registry shall include service metadata, health status, and usage statistics.
@@ -401,7 +401,7 @@ System shall maintain a registry of known external MCP and A2A services. Users c
 - Registry CRUD, health checks, and channel attach/detach work end-to-end.
 - Access control prevents unauthorised service usage.
 
-**Alignment**: [ARCH:CC8.1](ARCHITECTURE.md#cc81), [TASK:T057](TASKS.md#t057), [TEST:ST1.32](TESTS.md#st132), [TEST:IT2.25](TESTS.md#it225), [TEST:AT1.95](TESTS.md#at195)
+**Alignment**: [ARCH:CC8.1](ARCHITECTURE.md#cc81), TASK:T057, [TEST:ST1.32](TESTS.md#st132), [TEST:IT2.25](TESTS.md#it225), [TEST:AT1.95](TESTS.md#at195)
 
 ### FR1.20: Log History Management
 System shall provide comprehensive log history search and download capabilities. Users/group admins/super admins can view all log history relevant to them based on access controls. System shall support searching logs by date range, user, channel, session, keyword, and other filters. Users can download log data in various formats (JSON, CSV, etc.). System shall provide access to all jobs/calls outputs that users have permission to view.
@@ -425,7 +425,7 @@ System shall provide comprehensive log history search and download capabilities.
 - Search results and downloads match filters and access rules.
 - Exported data is complete, redacted, and reproducible.
 
-**Alignment**: [ARCH:CC7.1](ARCHITECTURE.md#cc71), [TASK:T058](TASKS.md#t058), [TEST:ST1.33](TESTS.md#st133), [TEST:IT2.26](TESTS.md#it226), [TEST:AT1.96](TESTS.md#at196)
+**Alignment**: [ARCH:CC7.1](ARCHITECTURE.md#cc71), TASK:T058, [TEST:ST1.33](TESTS.md#st133), [TEST:IT2.26](TESTS.md#it226), [TEST:AT1.96](TESTS.md#at196)
 
 ### FR1.21: Web UI Channel Management
 System shall provide web interface capabilities for users to extend channel configurations and manage access as permitted by their roles. Users can create, edit, and delete channels through the web UI. Channel configuration includes LLM settings, prompts, tools, vector stores, and access controls. Changes are validated and require appropriate permissions.
@@ -450,7 +450,7 @@ System shall provide web interface capabilities for users to extend channel conf
 - All channel CRUD operations are possible via Web UI without direct API use.
 - Permissions prevent unauthorised edits or deletes.
 
-**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [TASK:T059](TASKS.md#t059), [TEST:ST1.28](TESTS.md#st128), [TEST:IT2.21](TESTS.md#it221), [TEST:AT1.91](TESTS.md#at191), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), TASK:T059, [TEST:ST1.28](TESTS.md#st128), [TEST:IT2.21](TESTS.md#it221), [TEST:AT1.91](TESTS.md#at191), [TEST:AT1.94](TESTS.md#at194)
 
 ### FR1.22: Web UI Testing Interface
 System shall provide a web interface for users to run tests on all interfaces/experts/calls. Users can add content to test each expert configuration. Testing interface shall support testing with various input types (text, multimedia), viewing responses, and validating expert behavior. Test results shall be logged and available for review.
@@ -471,7 +471,7 @@ System shall provide a web interface for users to run tests on all interfaces/ex
 - Users can run a test, view results, and download artefacts.
 - Tests require configured services; failures are explicit.
 
-**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [TASK:T060](TASKS.md#t060), [TEST:ST1.29](TESTS.md#st129), [TEST:IT2.22](TESTS.md#it222), [TEST:AT1.92](TESTS.md#at192), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), TASK:T060, [TEST:ST1.29](TESTS.md#st129), [TEST:IT2.22](TESTS.md#it222), [TEST:AT1.92](TESTS.md#at192), [TEST:AT1.94](TESTS.md#at194)
 
 ### FR1.43: Web UI Full Functional Coverage and Operational Safety
 System shall provide a complete Web UI surface that allows authorised users/admins to operate all major capabilities without direct API use, with strict RBAC and audit controls.
@@ -496,7 +496,7 @@ System shall provide a complete Web UI surface that allows authorised users/admi
 - Browser-driven E2E suites (Selenium/Playwright) cover panel loads, critical CRUD/testing flows, and endpoint-path smoke checks.
 - Coverage is traceable in `docs/TESTS.md` with executable test IDs and files.
 
-**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [ARCH:AI1.4](ARCHITECTURE.md#ai14), [TASK:T124](TASKS.md#t124), [TEST:IT2.17](TESTS.md#it217), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [ARCH:AI1.4](ARCHITECTURE.md#ai14), TASK:T124, [TEST:IT2.17](TESTS.md#it217), [TEST:AT1.94](TESTS.md#at194)
 
 ### FR1.23: Channel Analytics and Statistics
 System shall provide statistics and analytics for each expert channel including: usage metrics (number of calls, active sessions), success rates, cost metrics (token usage, API costs), performance metrics (average latency, error rates), and user engagement metrics. Statistics shall be available to channel owners, group admins, and super admins based on access controls.
@@ -514,12 +514,12 @@ System shall provide statistics and analytics for each expert channel including:
 - Metrics match underlying job records and are reproducible.
 - Access control prevents cross-channel leakage.
 
-**Alignment**: [ARCH:MO1.4](ARCHITECTURE.md#mo14), [TASK:T061](TASKS.md#t061), [TEST:ST1.30](TESTS.md#st130), [TEST:IT2.23](TESTS.md#it223), [TEST:AT1.93](TESTS.md#at193)
+**Alignment**: [ARCH:MO1.4](ARCHITECTURE.md#mo14), TASK:T061, [TEST:ST1.30](TESTS.md#st130), [TEST:IT2.23](TESTS.md#it223), [TEST:AT1.93](TESTS.md#at193)
 
 ### FR1.24: Developer API Access
 System shall provide comprehensive API access for developers with proper authentication. All endpoints shall be accessible via API with appropriate authentication (API keys, OAuth, etc.). API documentation shall be complete with examples, schemas, and authentication requirements. Developer access shall support all CRUD operations on resources the developer has permission to access.
 
-**Alignment**: [ARCH:AI1.1](ARCHITECTURE.md#ai11), [TASK:T062](TASKS.md#t062), [TEST:IT2.9](TESTS.md#it29)
+**Alignment**: [ARCH:AI1.1](ARCHITECTURE.md#ai11), TASK:T062, [TEST:IT2.9](TESTS.md#it29)
 
 ### FR1.25: External Agentic Integration
 System shall support external agentic flows calling experts via MCP or API interfaces with proper credentials. MCP interface shall provide tools for expert interaction. API interface shall support both synchronous and asynchronous calls. System shall handle authentication, rate limiting, and access control for external agentic flows.
@@ -537,7 +537,7 @@ System shall support external agentic flows calling experts via MCP or API inter
 - MCP tool calls and API calls return consistent results.
 - Access control and rate limits are enforced under load.
 
-**Alignment**: [ARCH:AI1.2](ARCHITECTURE.md#ai12), [TASK:T063](TASKS.md#t063), [TEST:ST1.34](TESTS.md#st134), [TEST:IT2.27](TESTS.md#it227), [TEST:AT1.97](TESTS.md#at197)
+**Alignment**: [ARCH:AI1.2](ARCHITECTURE.md#ai12), TASK:T063, [TEST:ST1.34](TESTS.md#st134), [TEST:IT2.27](TESTS.md#it227), [TEST:AT1.97](TESTS.md#at197)
 
 ### FR1.26: Queue Management with CRUD Operations
 System shall manage all requests and jobs in a queue that supports CRUD (Create, Read, Update, Delete) actions from all authenticated users/interfaces. Queue shall support job creation, status checking, updating job metadata, and cancellation/deletion. Queue operations shall respect access controls and permissions. Queue shall provide visibility into job status, progress, and results.
@@ -555,7 +555,7 @@ System shall manage all requests and jobs in a queue that supports CRUD (Create,
 - Jobs transition through valid states only.
 - Cancelled jobs stop processing within defined timeout.
 
-**Alignment**: [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), [TASK:T064](TASKS.md#t064), [TEST:ST1.35](TESTS.md#st135), [TEST:IT2.28](TESTS.md#it228), [TEST:AT1.98](TESTS.md#at198)
+**Alignment**: [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), TASK:T064, [TEST:ST1.35](TESTS.md#st135), [TEST:IT2.28](TESTS.md#it228), [TEST:AT1.98](TESTS.md#at198)
 
 ### FR1.27: Group Admin Role Management
 System shall support group admin roles where group admins have administrative privileges for their assigned groups only. Group admins can manage users, channels, API keys, and configurations within their groups. System admins can create groups and assign group admins. Group admins have full control over their group's resources but cannot access other groups' resources.
@@ -573,7 +573,7 @@ System shall support group admin roles where group admins have administrative pr
 - Group admin actions succeed within their group and fail outside it.
 - Audit trail is complete for role changes and admin actions.
 
-**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), [TASK:T114](TASKS.md#t114), [TEST:ST1.36](TESTS.md#st136), [TEST:IT2.29](TESTS.md#it229), [TEST:AT1.99](TESTS.md#at199)
+**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), TASK:T114, [TEST:ST1.36](TESTS.md#st136), [TEST:IT2.29](TESTS.md#it229), [TEST:AT1.99](TESTS.md#at199)
 
 ### FR1.28: Prompt Test Case Generation
 System shall generate example test cases when creating expert configurations. Test cases shall exercise the LLM, knowledge base, and tools. Test cases can be edited and used for validation. System shall use LLM to generate appropriate test scenarios based on expert description and configuration.
@@ -591,7 +591,7 @@ System shall generate example test cases when creating expert configurations. Te
 - Generated cases include inputs, expected output shape, and validation hints.
 - Cases are runnable via API and Web UI test interfaces.
 
-**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), [TASK:T115](TASKS.md#t115), [TEST:ST1.37](TESTS.md#st137), [TEST:IT2.30](TESTS.md#it230), [TEST:AT1.100](TESTS.md#at1100)
+**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), TASK:T115, [TEST:ST1.37](TESTS.md#st137), [TEST:IT2.30](TESTS.md#it230), [TEST:AT1.100](TESTS.md#at1100)
 
 ### FR1.29: LLM Validation Testing
 System shall provide capability to run short validation tests for LLM configurations before channel activation. Tests shall validate LLM connectivity, prompt rendering, and basic response generation. Test results shall indicate success/failure with details. Tests can be run on-demand during channel setup.
@@ -609,7 +609,7 @@ System shall provide capability to run short validation tests for LLM configurat
 - Validation failures block activation by default.
 - Results are available via API and Web UI.
 
-**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), [TASK:T116](TASKS.md#t116), [TEST:ST1.38](TESTS.md#st138), [TEST:IT2.31](TESTS.md#it231), [TEST:AT1.101](TESTS.md#at1101)
+**Alignment**: [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), TASK:T116, [TEST:ST1.38](TESTS.md#st138), [TEST:IT2.31](TESTS.md#it231), [TEST:AT1.101](TESTS.md#at1101)
 
 ### FR1.30: Response Quality Evaluation
 System shall evaluate each LLM response for quality metrics including relevance, completeness, and accuracy. System shall support user feedback and automated quality checks. Quality scores shall be stored with job records and available in analytics. System shall provide quality confirmation indicators.
@@ -627,7 +627,7 @@ System shall evaluate each LLM response for quality metrics including relevance,
 - Quality scores are stored and retrievable by authorised users.
 - Analytics aggregates match underlying job records.
 
-**Alignment**: [ARCH:MO1.4](ARCHITECTURE.md#mo14), [TASK:T117](TASKS.md#t117), [TEST:ST1.39](TESTS.md#st139), [TEST:IT2.32](TESTS.md#it232), [TEST:AT1.102](TESTS.md#at1102)
+**Alignment**: [ARCH:MO1.4](ARCHITECTURE.md#mo14), TASK:T117, [TEST:ST1.39](TESTS.md#st139), [TEST:IT2.32](TESTS.md#it232), [TEST:AT1.102](TESTS.md#at1102)
 
 ### FR1.31: Knowledge History CRUD with Permissions
 System shall provide CRUD operations for knowledge history on user/group/session basis with permission-based access control. Users can view/manage their own knowledge, group admins can manage group knowledge, and session participants can manage session knowledge. Knowledge can be removed/deleted based on permissions. All operations respect access controls.
@@ -656,7 +656,7 @@ System shall provide CRUD operations for knowledge history on user/group/session
 - CRUD operations enforce scope-based permissions.
 - Version listing and rollback work with full audit trail.
 
-**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T118](TASKS.md#t118), [TEST:ST1.40](TESTS.md#st140), [TEST:IT2.33](TESTS.md#it233), [TEST:AT1.103](TESTS.md#at1103)
+**Alignment**: [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T118, [TEST:ST1.40](TESTS.md#st140), [TEST:IT2.33](TESTS.md#it233), [TEST:AT1.103](TESTS.md#at1103)
 
 ### FR1.32: Job Queue CRUD Operations (Admin)
 System shall provide comprehensive CRUD operations for job queue management by admins. Admins can view all jobs with full details (user, channel, session, settings, outputs, thinking), remove unwanted jobs, resubmit failed jobs, and stop running jobs. All operations shall be audited. Queue operations support filtering, searching, and bulk actions.
@@ -674,7 +674,7 @@ System shall provide comprehensive CRUD operations for job queue management by a
 - Admin operations enforce role checks and are fully audited.
 - Resubmitted jobs preserve original metadata with a new job ID.
 
-**Alignment**: [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), [TASK:T119](TASKS.md#t119), [TEST:ST1.41](TESTS.md#st141), [TEST:IT2.34](TESTS.md#it234), [TEST:AT1.104](TESTS.md#at1104)
+**Alignment**: [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), TASK:T119, [TEST:ST1.41](TESTS.md#st141), [TEST:IT2.34](TESTS.md#it234), [TEST:AT1.104](TESTS.md#at1104)
 
 ### FR1.32A: Job Control WebUI (PS-76)
 System shall provide a PS-76-compliant Job Control WebUI in the shared frontend application. The Jobs page shall use `@cloud-dog/ui` `DataTable`, standard status badges, bulk actions, summary metrics, and a job detail `EntityDialog`.
@@ -696,7 +696,7 @@ System shall provide a PS-76-compliant Job Control WebUI in the shared frontend 
 - Status badge colouring follows PS-76 mappings.
 - Session and user identifiers are visible in the Jobs table and detail dialog.
 
-**Alignment**: [REQ:FR1.32](REQUIREMENTS.md#fr132), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), [TASK:T119](TASKS.md#t119), [TEST:ST1.41](TESTS.md#st141), [TEST:AT1.104](TESTS.md#at1104)
+**Alignment**: [REQ:FR1.32](REQUIREMENTS.md#fr132), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), TASK:T119, [TEST:ST1.41](TESTS.md#st141), [TEST:AT1.104](TESTS.md#at1104)
 
 ### FR1.33: Channel REST Endpoint (Async/Sync)
 System shall provide a REST endpoint for channel interactions that supports both synchronous and asynchronous modes. Endpoint shall accept API key authentication and return responses immediately (sync) or job ID for status checking (async). Both modes support same request format. Async mode supports webhook callbacks for completion notification.
@@ -718,7 +718,7 @@ System shall provide a REST endpoint for channel interactions that supports both
 - Sync and async modes produce equivalent content.
 - Webhook callbacks are delivered and verifiable when enabled.
 
-**Alignment**: [ARCH:CC1.1.1](ARCHITECTURE.md#cc111), [TASK:T120](TASKS.md#t120), [TEST:ST1.27](TESTS.md#st127), [TEST:IT2.20](TESTS.md#it220), [TEST:AT1.90](TESTS.md#at190)
+**Alignment**: [ARCH:CC1.1.1](ARCHITECTURE.md#cc111), TASK:T120, [TEST:ST1.27](TESTS.md#st127), [TEST:IT2.20](TESTS.md#it220), [TEST:AT1.90](TESTS.md#at190)
 
 ### FR1.34: File Store Management (Admin)
 System shall provide admin interface and API for managing files in the local file store.
@@ -739,12 +739,12 @@ System shall provide admin interface and API for managing files in the local fil
 - If a backend is configured in the active `--env`, failures must be surfaced as failures (no silent skips for required services).
 - All file operations must be authenticated and audited where applicable.
 
-**Alignment**: [TASK:T121](TASKS.md#t121), [TEST:ST1.45](TESTS.md#st145), [TEST:ST1.46](TESTS.md#st146), [TEST:IT2.37](TESTS.md#it237), [TEST:AT1.114](TESTS.md#at1114), [TEST:AT1.116](TESTS.md#at1116), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: TASK:T121, [TEST:ST1.45](TESTS.md#st145), [TEST:ST1.46](TESTS.md#st146), [TEST:IT2.37](TESTS.md#it237), [TEST:AT1.114](TESTS.md#at1114), [TEST:AT1.116](TESTS.md#at1116), [TEST:AT1.94](TESTS.md#at194)
 
 ### FR1.42: Comprehensive Expert Test Suite
 System shall provide extensive test suite framework for validating expert configurations. Tests shall validate LLM responses, tool calls, vector retrieval, knowledge sharing, history management, and multimedia processing. Test results shall be stored and reportable. Tests can be run against known/test expert examples to confirm functionality and capability.
 
-**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), [TASK:T122](TASKS.md#t122), [TEST:PT1.20](TESTS.md#pt120)
+**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), TASK:T122, [TEST:PT1.20](TESTS.md#pt120)
 
 ---
 
@@ -753,147 +753,147 @@ System shall provide extensive test suite framework for validating expert config
 ### UC1.1: Start Conversation with Expert
 As a user, I want to start a conversation with an expert assistant so that I can get intelligent, context-aware responses.
 
-**Alignment**: [REQ:FR1.1](REQUIREMENTS.md#fr11), [ARCH:AI1.1](ARCHITECTURE.md#ai11), [TASK:T022](TASKS.md#t022), [TEST:AT1.9](TESTS.md#at19)
+**Alignment**: [REQ:FR1.1](REQUIREMENTS.md#fr11), [ARCH:AI1.1](ARCHITECTURE.md#ai11), TASK:T022, [TEST:AT1.9](TESTS.md#at19)
 
 ### UC1.2: Access Knowledge Base
 As a user, I want to access knowledge base information during conversations so that responses are enhanced with relevant context.
 
-**Alignment**: [REQ:FR1.3](REQUIREMENTS.md#fr13), [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T014](TASKS.md#t014), [TEST:AT1.10](TESTS.md#at110)
+**Alignment**: [REQ:FR1.3](REQUIREMENTS.md#fr13), [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T014, [TEST:AT1.10](TESTS.md#at110)
 
 ### UC1.3: Manage Expert Configurations
 As an administrator, I want to manage expert configurations including LLM settings, prompts, and access control so that different expertise domains are available to users.
 
-**Alignment**: [REQ:FR1.1](REQUIREMENTS.md#fr11), [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T007](TASKS.md#t007), [TEST:AT1.11](TESTS.md#at111)
+**Alignment**: [REQ:FR1.1](REQUIREMENTS.md#fr11), [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T007, [TEST:AT1.11](TESTS.md#at111)
 
 ### UC1.4: Manage User Preferences
 As an administrator, I want to manage user preferences including language, timezone, and access permissions so that users have appropriate access to expert configurations.
 
-**Alignment**: [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:CC5.1](ARCHITECTURE.md#cc51), [TASK:T005](TASKS.md#t005), [TEST:AT1.12](TESTS.md#at112)
+**Alignment**: [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:CC5.1](ARCHITECTURE.md#cc51), TASK:T005, [TEST:AT1.12](TESTS.md#at112)
 
 ### UC1.5: Monitor System Health
 As an administrator, I want to monitor system health, metrics, and performance so that I can ensure optimal system operation.
 
-**Alignment**: [REQ:FR1.9](REQUIREMENTS.md#fr19), [ARCH:MO1.1](ARCHITECTURE.md#mo11), [TASK:T040](TASKS.md#t040), [TEST:ST1.6](TESTS.md#st16)
+**Alignment**: [REQ:FR1.9](REQUIREMENTS.md#fr19), [ARCH:MO1.1](ARCHITECTURE.md#mo11), TASK:T040, [TEST:ST1.6](TESTS.md#st16)
 
 ### UC1.6: Agentic Flow with Channel-Based Expert
 As part of an agentic flow, I want to call an expert system with an LLM and attached knowledge base to help answer a particular question. The expert system has a specific LLM with specific parameters, configured on a per-channel basis. I can set up and use new channels for different scenarios. The expert can have a history of knowledge defined on a user, channel, or session basis with definable limitations (e.g., only remember last 3 weeks). This history can be shared across different expert channels (by session key or user). The expert will have multiple defined knowledge bases stored in vector databases that can augment the search. The expert may call on a rerank model. The expert may have one or more tools and other agents it can call to resolve queries.
 
-**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.2](REQUIREMENTS.md#fr12), [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T050](TASKS.md#t050), [TEST:AT1.13](TESTS.md#at113)
+**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.2](REQUIREMENTS.md#fr12), [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T050, [TEST:AT1.13](TESTS.md#at113)
 
 ### UC1.7: Multimedia Processing
 As a user, I want to send and receive multimedia information including images, audio, and movies for processing and returning in expert conversations.
 
-**Alignment**: [REQ:FR1.13](REQUIREMENTS.md#fr113), [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), [TASK:T051](TASKS.md#t051), [TEST:AT1.105](TESTS.md#at1105)
+**Alignment**: [REQ:FR1.13](REQUIREMENTS.md#fr113), [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), TASK:T051, [TEST:AT1.105](TESTS.md#at1105)
 
 ### UC1.8: Comprehensive Session and Job Logging
 As the system, I need to record each session with a full log, and for each LLM/Expert call save a full job/call record with all information including prompts, responses, metadata, and performance metrics.
 
-**Alignment**: [REQ:FR1.14](REQUIREMENTS.md#fr114), [ARCH:CC7.1](ARCHITECTURE.md#cc71), [TASK:T052](TASKS.md#t052), [TEST:ST1.20](TESTS.md#st120)
+**Alignment**: [REQ:FR1.14](REQUIREMENTS.md#fr114), [ARCH:CC7.1](ARCHITECTURE.md#cc71), TASK:T052, [TEST:ST1.20](TESTS.md#st120)
 
 ### UC1.9: Auto-Generate Expert Prompts
 As a user, I want to provide an expert description (title, details, context type, expected outcomes) and have the system generate an example prompt and settings that encapsulate the prompt, tool calls (from available set), to help define the expert configuration.
 
-**Alignment**: [REQ:FR1.15](REQUIREMENTS.md#fr115), [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), [TASK:T053](TASKS.md#t053), [TEST:AT1.107](TESTS.md#at1107)
+**Alignment**: [REQ:FR1.15](REQUIREMENTS.md#fr115), [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), TASK:T053, [TEST:AT1.107](TESTS.md#at1107)
 
 ### UC1.10: Tool and External Service Management
 As a user, I want to add a tool definition to a channel. As a user, I want to add an external A2A/MCP service into the system, check it is working/responding, apply it to one or more channels to make it available, and then prompt/evaluate the channel prompt to see if it needs enhancing.
 
-**Alignment**: [REQ:FR1.16](REQUIREMENTS.md#fr116), [ARCH:CC8.1](ARCHITECTURE.md#cc81), [TASK:T054](TASKS.md#t054), [TEST:AT1.110](TESTS.md#at1110)
+**Alignment**: [REQ:FR1.16](REQUIREMENTS.md#fr116), [ARCH:CC8.1](ARCHITECTURE.md#cc81), TASK:T054, [TEST:AT1.110](TESTS.md#at1110)
 
 ### UC1.11: Group and User API Key Management
 As a user, I am a member of a number of groups. As a defined group admin, I can manage the users of the group. You can define system users. Users and Groups can define API keys that provide read and/or write access to channels, logs, histories.
 
-**Alignment**: [REQ:FR1.17](REQUIREMENTS.md#fr117), [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), [TASK:T055](TASKS.md#t055), [TEST:AT1.17](TESTS.md#at117)
+**Alignment**: [REQ:FR1.17](REQUIREMENTS.md#fr117), [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), TASK:T055, [TEST:AT1.17](TESTS.md#at117)
 
 ### UC1.12: OpenRouter Integration
 As a user, I want to create Ollama and OpenAI-compatible channels/Experts using an OpenRouter.ai endpoint.
 
-**Alignment**: [REQ:FR1.18](REQUIREMENTS.md#fr118), [ARCH:IP1.1.4](ARCHITECTURE.md#ip114), [TASK:T056](TASKS.md#t056), [TEST:IT2.8](TESTS.md#it28)
+**Alignment**: [REQ:FR1.18](REQUIREMENTS.md#fr118), [ARCH:IP1.1.4](ARCHITECTURE.md#ip114), TASK:T056, [TEST:IT2.8](TESTS.md#it28)
 
 ### UC1.13: External Service Registry
 As a user, I want to pick an external MCP service or A2A service from a known list, add a key if necessary, apply group/user access rights, confirm any history/context memory, confirm the endpoint works, and then add/use the service in one or more of the expert channels that I am allowed to update/add this to (either as the owner/originator, or group admin member).
 
-**Alignment**: [REQ:FR1.19](REQUIREMENTS.md#fr119), [ARCH:CC8.1](ARCHITECTURE.md#cc81), [TASK:T057](TASKS.md#t057), [TEST:AT1.95](TESTS.md#at195)
+**Alignment**: [REQ:FR1.19](REQUIREMENTS.md#fr119), [ARCH:CC8.1](ARCHITECTURE.md#cc81), TASK:T057, [TEST:AT1.95](TESTS.md#at195)
 
 ### UC1.14: Log History Search and Download
 As a user/group admin/super admin, I want to be able to see all the log history that is relevant to me, search it, and download it. I want to be able to see all the jobs/calls outputs that I have access to.
 
-**Alignment**: [REQ:FR1.20](REQUIREMENTS.md#fr120), [ARCH:CC7.1](ARCHITECTURE.md#cc71), [TASK:T058](TASKS.md#t058), [TEST:AT1.96](TESTS.md#at196)
+**Alignment**: [REQ:FR1.20](REQUIREMENTS.md#fr120), [ARCH:CC7.1](ARCHITECTURE.md#cc71), TASK:T058, [TEST:AT1.96](TESTS.md#at196)
 
 ### UC1.15: Web UI Channel Configuration
 From the web interface, as a user, I want to be able to extend the configuration of channels and access as I am allowed to do.
 
-**Alignment**: [REQ:FR1.21](REQUIREMENTS.md#fr121), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [TASK:T059](TASKS.md#t059), [TEST:AT1.91](TESTS.md#at191)
+**Alignment**: [REQ:FR1.21](REQUIREMENTS.md#fr121), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), TASK:T059, [TEST:AT1.91](TESTS.md#at191)
 
 ### UC1.16: Web UI Testing Interface
 From the web interface, as a user, I want to be able to run tests on all the interfaces/experts/calls including adding content to try each expert.
 
-**Alignment**: [REQ:FR1.22](REQUIREMENTS.md#fr122), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [TASK:T060](TASKS.md#t060), [TEST:AT1.92](TESTS.md#at192)
+**Alignment**: [REQ:FR1.22](REQUIREMENTS.md#fr122), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), TASK:T060, [TEST:AT1.92](TESTS.md#at192)
 
 ### UC1.17: Channel Analytics and Statistics
 As a group/channel owner, I want to be able to see statistics on use, success, cost (tokens) of each expert channel.
 
-**Alignment**: [REQ:FR1.23](REQUIREMENTS.md#fr123), [ARCH:MO1.4](ARCHITECTURE.md#mo14), [TASK:T061](TASKS.md#t061), [TEST:AT1.93](TESTS.md#at193)
+**Alignment**: [REQ:FR1.23](REQUIREMENTS.md#fr123), [ARCH:MO1.4](ARCHITECTURE.md#mo14), TASK:T061, [TEST:AT1.93](TESTS.md#at193)
 
 ### UC1.18: Developer API Access
 As a developer, I want to have access to all endpoints with the right authentication via the API.
 
-**Alignment**: [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:AI1.1](ARCHITECTURE.md#ai11), [TASK:T062](TASKS.md#t062), [TEST:IT2.9](TESTS.md#it29)
+**Alignment**: [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:AI1.1](ARCHITECTURE.md#ai11), TASK:T062, [TEST:IT2.9](TESTS.md#it29)
 
 ### UC1.19: External Agentic Flow Integration
 As an external agentic flow, I want to be able to call an expert with the right credentials via MCP or API interface.
 
-**Alignment**: [REQ:FR1.25](REQUIREMENTS.md#fr125), [ARCH:AI1.2](ARCHITECTURE.md#ai12), [TASK:T063](TASKS.md#t063), [TEST:AT1.97](TESTS.md#at197)
+**Alignment**: [REQ:FR1.25](REQUIREMENTS.md#fr125), [ARCH:AI1.2](ARCHITECTURE.md#ai12), TASK:T063, [TEST:AT1.97](TESTS.md#at197)
 
 ### UC1.20: Queue Management with CRUD Operations
 As the system, I need to manage all the requests and jobs in a queue that can support CRUD actions from all authenticated users/interfaces.
 
-**Alignment**: [REQ:FR1.26](REQUIREMENTS.md#fr126), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), [TASK:T064](TASKS.md#t064), [TEST:ST1.35](TESTS.md#st135), [TEST:AT1.98](TESTS.md#at198)
+**Alignment**: [REQ:FR1.26](REQUIREMENTS.md#fr126), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), TASK:T064, [TEST:ST1.35](TESTS.md#st135), [TEST:AT1.98](TESTS.md#at198)
 
 ### UC1.21: Group Admin Management
 As a system admin, I want to create groups and assign group admin users so that group admins can manage their own groups independently.
 
-**Alignment**: [REQ:FR1.27](REQUIREMENTS.md#fr127), [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:SE1.1](ARCHITECTURE.md#se11), [TASK:T114](TASKS.md#t114), [TEST:AT1.99](TESTS.md#at199)
+**Alignment**: [REQ:FR1.27](REQUIREMENTS.md#fr127), [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:SE1.1](ARCHITECTURE.md#se11), TASK:T114, [TEST:AT1.99](TESTS.md#at199)
 
 ### UC1.22: Channel Setup with Tools and History
 As a group admin, I want to create a channel/expert with scope, tools, and history preferences so that the expert can respond intelligently with appropriate context.
 
-**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.15](REQUIREMENTS.md#fr115), [REQ:FR1.16](REQUIREMENTS.md#fr116), [ARCH:CC3.1](ARCHITECTURE.md#cc31), [TASK:T050](TASKS.md#t050), [TASK:T053](TASKS.md#t053), [TEST:AT1.13](TESTS.md#at113)
+**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.15](REQUIREMENTS.md#fr115), [REQ:FR1.16](REQUIREMENTS.md#fr116), [ARCH:CC3.1](ARCHITECTURE.md#cc31), TASK:T050, TASK:T053, [TEST:AT1.13](TESTS.md#at113)
 
 ### UC1.23: LLM Validation Testing
 As a group admin, I want to run a short test to validate the LLM before deploying the channel so that I can ensure the expert configuration works correctly.
 
-**Alignment**: [REQ:FR1.29](REQUIREMENTS.md#fr129), [REQ:FR1.15](REQUIREMENTS.md#fr115), [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), [TASK:T116](TASKS.md#t116), [TEST:AT1.101](TESTS.md#at1101)
+**Alignment**: [REQ:FR1.29](REQUIREMENTS.md#fr129), [REQ:FR1.15](REQUIREMENTS.md#fr115), [ARCH:CC3.1.4](ARCHITECTURE.md#cc314), TASK:T116, [TEST:AT1.101](TESTS.md#at1101)
 
 ### UC1.24: User API Key Management
 As a group admin or user, I want to create and manage API keys for users with specific access scopes so that users can access channels/groups via API with appropriate permissions.
 
-**Alignment**: [REQ:FR1.17](REQUIREMENTS.md#fr117), [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), [TASK:T055](TASKS.md#t055), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [REQ:FR1.17](REQUIREMENTS.md#fr117), [ARCH:CC5.1.3](ARCHITECTURE.md#cc513), TASK:T055, [TEST:AT1.94](TESTS.md#at194)
 
 ### UC1.25: Multi-Group/Channel User Access
 As a user, I want to be a member of multiple groups with access to multiple channels so that I can interact with different experts for different purposes.
 
-**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), [TASK:T050](TASKS.md#t050), [TEST:AT1.13](TESTS.md#at113)
+**Alignment**: [REQ:FR1.12](REQUIREMENTS.md#fr112), [REQ:FR1.5](REQUIREMENTS.md#fr15), [ARCH:CC3.1.3](ARCHITECTURE.md#cc313), TASK:T050, [TEST:AT1.13](TESTS.md#at113)
 
 ### UC1.26: Knowledge History Management with Permissions
 As a user or admin, I want to manage knowledge history on user/group/session basis with appropriate permissions so that I can control what knowledge is retained and accessible.
 
-**Alignment**: [REQ:FR1.31](REQUIREMENTS.md#fr131), [REQ:FR1.12](REQUIREMENTS.md#fr112), [ARCH:CC4.1](ARCHITECTURE.md#cc41), [TASK:T118](TASKS.md#t118), [TEST:AT1.103](TESTS.md#at1103)
+**Alignment**: [REQ:FR1.31](REQUIREMENTS.md#fr131), [REQ:FR1.12](REQUIREMENTS.md#fr112), [ARCH:CC4.1](ARCHITECTURE.md#cc41), TASK:T118, [TEST:AT1.103](TESTS.md#at1103)
 
 ### UC1.27: Job Queue Management (Admin)
 As an admin, I want to view, remove, resubmit, and stop jobs in the queue so that I can manage system workload and handle problematic requests.
 
-**Alignment**: [REQ:FR1.32](REQUIREMENTS.md#fr132), [REQ:FR1.26](REQUIREMENTS.md#fr126), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), [TASK:T119](TASKS.md#t119), [TEST:AT1.104](TESTS.md#at1104)
+**Alignment**: [REQ:FR1.32](REQUIREMENTS.md#fr132), [REQ:FR1.26](REQUIREMENTS.md#fr126), [ARCH:CC2.1.2](ARCHITECTURE.md#cc212), TASK:T119, [TEST:AT1.104](TESTS.md#at1104)
 
 ### UC1.28: Response Quality Evaluation
 As a system, I want to evaluate responses to each job for quality/confirmation so that I can provide feedback on response quality and improve over time.
 
-**Alignment**: [REQ:FR1.30](REQUIREMENTS.md#fr130), [REQ:FR1.23](REQUIREMENTS.md#fr123), [ARCH:MO1.4](ARCHITECTURE.md#mo14), [TASK:T117](TASKS.md#t117), [TEST:AT1.102](TESTS.md#at1102)
+**Alignment**: [REQ:FR1.30](REQUIREMENTS.md#fr130), [REQ:FR1.23](REQUIREMENTS.md#fr123), [ARCH:MO1.4](ARCHITECTURE.md#mo14), TASK:T117, [TEST:AT1.102](TESTS.md#at1102)
 
 ### UC1.29: Channel REST Endpoint (Async/Sync)
 As a developer, I want to call a channel via REST API with API key in both async and sync modes so that I can integrate expert capabilities into my applications.
 
-**Alignment**: [REQ:FR1.33](REQUIREMENTS.md#fr133), [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:CC1.1.1](ARCHITECTURE.md#cc111), [TASK:T120](TASKS.md#t120), [TEST:IT2.20](TESTS.md#it220)
+**Alignment**: [REQ:FR1.33](REQUIREMENTS.md#fr133), [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:CC1.1.1](ARCHITECTURE.md#cc111), TASK:T120, [TEST:IT2.20](TESTS.md#it220)
 
 ### UC1.30: File Store Management (Admin)
 As an admin, I want to audit, view, upload, download, delete, translate, and ingest files so that I can manage storage, ensure compliance, and enable document-driven expert workflows (RAG).
@@ -905,22 +905,22 @@ As an admin, I want to audit, view, upload, download, delete, translate, and ing
 - Translate produces a new stored file record and preserves stable tokens/technical terms.
 - Ingest stores document content into the configured vector store and the content is queryable (API and MCP tooling).
 
-**Alignment**: [REQ:FR1.34](REQUIREMENTS.md#fr134), [REQ:FR1.13](REQUIREMENTS.md#fr113), [TASK:T121](TASKS.md#t121), [TEST:ST1.45](TESTS.md#st145), [TEST:ST1.46](TESTS.md#st146), [TEST:IT2.37](TESTS.md#it237), [TEST:AT1.114](TESTS.md#at1114), [TEST:AT1.116](TESTS.md#at1116), [TEST:AT1.94](TESTS.md#at194)
+**Alignment**: [REQ:FR1.34](REQUIREMENTS.md#fr134), [REQ:FR1.13](REQUIREMENTS.md#fr113), TASK:T121, [TEST:ST1.45](TESTS.md#st145), [TEST:ST1.46](TESTS.md#st146), [TEST:IT2.37](TESTS.md#it237), [TEST:AT1.114](TESTS.md#at1114), [TEST:AT1.116](TESTS.md#at1116), [TEST:AT1.94](TESTS.md#at194)
 
 ### UC1.31: Comprehensive Expert Test Suite
 As a system developer, I want to have extensive tests against known/test experts/examples so that I can confirm functionality and capability of each expert channel.
 
-**Alignment**: [REQ:FR1.42](REQUIREMENTS.md#fr142), [REQ:NF1.6](REQUIREMENTS.md#nf16), [ARCH:TS1.1](ARCHITECTURE.md#ts11), [TASK:T122](TASKS.md#t122), [TEST:PT1.20](TESTS.md#pt120)
+**Alignment**: [REQ:FR1.42](REQUIREMENTS.md#fr142), [REQ:NF1.6](REQUIREMENTS.md#nf16), [ARCH:TS1.1](ARCHITECTURE.md#ts11), TASK:T122, [TEST:PT1.20](TESTS.md#pt120)
 
 ### UC1.32: Complete API Coverage
 As a developer, I want to perform all administrative and user actions via API so that I can automate and integrate expert capabilities.
 
-**Alignment**: [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:AI1.1](ARCHITECTURE.md#ai11), [TASK:T123](TASKS.md#t123), [TEST:IT2.15](TESTS.md#it215)
+**Alignment**: [REQ:FR1.24](REQUIREMENTS.md#fr124), [ARCH:AI1.1](ARCHITECTURE.md#ai11), TASK:T123, [TEST:IT2.15](TESTS.md#it215)
 
 ### UC1.33: Complete Web UI Coverage
 As a user or admin, I want to perform all actions via Web UI so that I can manage the system without using API directly.
 
-**Alignment**: [REQ:FR1.21](REQUIREMENTS.md#fr121), [REQ:FR1.22](REQUIREMENTS.md#fr122), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), [TASK:T124](TASKS.md#t124), [TEST:IT2.16](TESTS.md#it216)
+**Alignment**: [REQ:FR1.21](REQUIREMENTS.md#fr121), [REQ:FR1.22](REQUIREMENTS.md#fr122), [ARCH:CC1.1.2](ARCHITECTURE.md#cc112), TASK:T124, [TEST:IT2.16](TESTS.md#it216)
 
 ---
 
@@ -937,27 +937,27 @@ System shall provide local auth (bcrypt/argon2) and API-key/JWT based API authen
 - Account lockout supported (config-driven, local node) after repeated failed login attempts
 - Disabled accounts cannot authenticate and cannot use previously issued Bearer/API key credentials
 
-**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), [TASK:T006](TASKS.md#t006), [TEST:ST1.7](TESTS.md#st17)
+**Alignment**: [ARCH:SE1.1](ARCHITECTURE.md#se11), TASK:T006, [TEST:ST1.7](TESTS.md#st17)
 
 ### CS1.2: Secret Management
 System shall provide secret management; TLS in production. Secrets storage; masked logs; HTTPS in prod.
 
-**Alignment**: [ARCH:SE1.2](ARCHITECTURE.md#se12), [TASK:T043](TASKS.md#t043), [TEST:ST1.8](TESTS.md#st18)
+**Alignment**: [ARCH:SE1.2](ARCHITECTURE.md#se12), TASK:T043, [TEST:ST1.8](TESTS.md#st18)
 
 ### CS1.3: Audit Events
 System shall provide audit events for all admin actions. Per-session auditable log containing all significant events: session creation, message exchanges, LLM interactions, vector store operations, state transitions, and errors. Each auditable log entry must be signed with a cryptographic certificate generated from a provided or generated key, ensuring authenticity and non-repudiation.
 
-**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), [TASK:T041](TASKS.md#t041), [TEST:ST1.9](TESTS.md#st19)
+**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), TASK:T041, [TEST:ST1.9](TESTS.md#st19)
 
 ### CS1.4: Data Protection
 System shall provide PII minimisation; GDPR-friendly exports; configurable retention; redact or hash sensitive content at rest. Vector store access controls; session-based data isolation. All logs/history access separated by users/groups - users only see their stuff or stuff they are allowed to see.
 
-**Alignment**: [ARCH:SE1.4](ARCHITECTURE.md#se14), [TASK:T026](TASKS.md#t026), [TEST:ST1.10](TESTS.md#st110)
+**Alignment**: [ARCH:SE1.4](ARCHITECTURE.md#se14), TASK:T026, [TEST:ST1.10](TESTS.md#st110)
 
 ### CS1.5: Identity Provider Authorization
 System shall support two authorization modes when using external identity providers (Keycloak): IDP Authorization Mode (use roles from identity provider) and Local Authorization Mode (use local authorization with remote authentication). Role mapping from IDP roles to system permissions. Role retrieval from tokens/user info.
 
-**Alignment**: [ARCH:SE1.5](ARCHITECTURE.md#se15), [TASK:T006](TASKS.md#t006), [TEST:ST1.11](TESTS.md#st111)
+**Alignment**: [ARCH:SE1.5](ARCHITECTURE.md#se15), TASK:T006, [TEST:ST1.11](TESTS.md#st111)
 
 ---
 
@@ -966,42 +966,42 @@ System shall support two authorization modes when using external identity provid
 ### NF1.1: Performance
 System shall provide response time < 200ms p95 for simple queries; LLM generation dependent. Submit-to-queue < 50ms p95; adapter latency surfaced in metrics.
 
-**Alignment**: [ARCH:SP1.1](ARCHITECTURE.md#sp11), [TASK:T044](TASKS.md#t044), [TEST:ST1.12](TESTS.md#st112)
+**Alignment**: [ARCH:SP1.1](ARCHITECTURE.md#sp11), TASK:T044, [TEST:ST1.12](TESTS.md#st112)
 
 ### NF1.2: Availability
 System shall provide 99.9% uptime with health checks and failover mechanisms. Health checks, degraded modes, default expert configuration required.
 
-**Alignment**: [ARCH:RR1.1](ARCHITECTURE.md#rr11), [TASK:T045](TASKS.md#t045), [TEST:ST1.13](TESTS.md#st113)
+**Alignment**: [ARCH:RR1.1](ARCHITECTURE.md#rr11), TASK:T045, [TEST:ST1.13](TESTS.md#st113)
 
 ### NF1.3: Scalability
 System shall support horizontal scaling of all components; support for 1000+ concurrent sessions. Horizontal workers; stateless API nodes; work-queue backed.
 
-**Alignment**: [ARCH:SP1.2](ARCHITECTURE.md#sp12), [TASK:T046](TASKS.md#t046), [TEST:ST1.14](TESTS.md#st114)
+**Alignment**: [ARCH:SP1.2](ARCHITECTURE.md#sp12), TASK:T046, [TEST:ST1.14](TESTS.md#st114)
 
 ### NF1.4: Compliance
 System shall provide GDPR, CCPA compliance with data minimization and right to deletion. Configurable retention; PII minimisation; GDPR-friendly exports.
 
-**Alignment**: [ARCH:SE1.4](ARCHITECTURE.md#se14), [TASK:T026](TASKS.md#t026), [TEST:ST1.15](TESTS.md#st115)
+**Alignment**: [ARCH:SE1.4](ARCHITECTURE.md#se14), TASK:T026, [TEST:ST1.15](TESTS.md#st115)
 
 ### NF1.5: Portability
 System shall be containerized deployment with Docker; Kubernetes support. Config hierarchy: default → file → env; env prefix `CLOUD_DOG__EXPERT__`.
 
-**Alignment**: [ARCH:DA1.1](ARCHITECTURE.md#da11), [TASK:T047](TASKS.md#t047), [TEST:ST1.16](TESTS.md#st116)
+**Alignment**: [ARCH:DA1.1](ARCHITECTURE.md#da11), TASK:T047, [TEST:ST1.16](TESTS.md#st116)
 
 ### NF1.6: Testability
 System shall provide unit, integration, and end-to-end test coverage > 80%. Unit/integration/E2E suites; provider simulators; fixtures.
 
-**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), [TASK:T048](TASKS.md#t048), [TEST:UT1.1](TESTS.md#ut11)
+**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), TASK:T048, [TEST:UT1.1](TESTS.md#ut11)
 
 ### NF1.7: Auditability
 System shall maintain a per-session auditable log containing all significant events: session creation, message exchanges, LLM interactions, vector store operations, state transitions, and errors. Each auditable log entry must be signed with a cryptographic certificate generated from a provided or generated key, ensuring authenticity and non-repudiation. All entries include a precise datetime stamp, referencing the origin session, sender context, and associated records. Allow export or verification of the signed audit trail for compliance and dispute resolution.
 
-**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), [TASK:T041](TASKS.md#t041), [TEST:ST1.17](TESTS.md#st117)
+**Alignment**: [ARCH:SE1.3](ARCHITECTURE.md#se13), TASK:T041, [TEST:ST1.17](TESTS.md#st117)
 
 ### NF1.8: Data Retention & Privacy
 System shall provide configurable retention windows for sessions, messages, history, and logs. Redact or hash sensitive content at rest where possible; store links for large payloads. Data lifecycle management and deletion based on settings, to remove content inline with DPA.
 
-**Alignment**: [ARCH:DM1.1](ARCHITECTURE.md#dm11), [TASK:T026](TASKS.md#t026), [TEST:ST1.18](TESTS.md#st118)
+**Alignment**: [ARCH:DM1.1](ARCHITECTURE.md#dm11), TASK:T026, [TEST:ST1.18](TESTS.md#st118)
 
 ---
 
@@ -1013,7 +1013,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Multi-backend vector coverage is validated in AT and ST runs for Chroma (local/remote), Qdrant, Weaviate, OpenSearch, and PGVector, with environment-specific availability handling.
 - OpenRouter integration is validated with OpenRouter model identifiers and explicit handling of empty `content` responses where providers return `reasoning`.
 
-**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), [TASK:T014](TASKS.md#t014), [TASK:T125](TASKS.md#t125), [TEST:AT1.10](TESTS.md#at110), [TEST:AT1.11](TESTS.md#at111), [TEST:AT1.17](TESTS.md#at117)
+**Alignment**: [ARCH:TS1.1](ARCHITECTURE.md#ts11), TASK:T014, TASK:T125, [TEST:AT1.10](TESTS.md#at110), [TEST:AT1.11](TESTS.md#at111), [TEST:AT1.17](TESTS.md#at117)
 
 ### CQ1.2: Identified Coverage Gaps
 - System tests for MCP/A2A/Web currently include structural checks, but not enough protocol-depth or behavioural-resilience validation.
@@ -1021,7 +1021,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - UC-level traceability is incomplete for "complete API coverage" and "complete Web UI coverage" claims (UC1.32, UC1.33) versus executable evidence.
 - Cross-interface parity validation (same scenario over REST, MCP, A2A, and Web UI) is not yet enforced as a release gate.
 
-**Alignment**: [ARCH:AI1.2](ARCHITECTURE.md#ai12), [ARCH:AI1.3](ARCHITECTURE.md#ai13), [ARCH:AI1.4](ARCHITECTURE.md#ai14), [TASK:T126](TASKS.md#t126), [TASK:T127](TASKS.md#t127), [TASK:T128](TASKS.md#t128)
+**Alignment**: [ARCH:AI1.2](ARCHITECTURE.md#ai12), [ARCH:AI1.3](ARCHITECTURE.md#ai13), [ARCH:AI1.4](ARCHITECTURE.md#ai14), TASK:T126, TASK:T127, TASK:T128
 
 ### CQ1.3: Mandatory Quality Gates for "High Confidence"
 - Gate 1: Zero failing tests in scoped suites (UT/IT/ST/AT), with all skips reviewed and explicitly justified.
@@ -1030,7 +1030,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Gate 4: UC-to-test traceability must be explicit in docs and executable test suites for UC1.32 and UC1.33.
 - Gate 5: Release candidate requires backend matrix verification across configured vector stores and active LLM provider profile.
 
-**Alignment**: [ARCH:TS1.2](ARCHITECTURE.md#ts12), [TASK:T129](TASKS.md#t129), [TASK:T130](TASKS.md#t130), [TASK:T131](TASKS.md#t131), [TASK:T132](TASKS.md#t132)
+**Alignment**: [ARCH:TS1.2](ARCHITECTURE.md#ts12), TASK:T129, TASK:T130, TASK:T131, TASK:T132
 
 ---
 
@@ -1099,7 +1099,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Configurable retention for audit logs
 - Point-in-time recovery support (PostgreSQL)
 
-**Alignment**: [REQ:NF1.8](REQUIREMENTS.md#nf18), [ARCH:CC6.1.1](ARCHITECTURE.md#cc611), [TASK:T002](TASKS.md#t002)
+**Alignment**: [REQ:NF1.8](REQUIREMENTS.md#nf18), [ARCH:CC6.1.1](ARCHITECTURE.md#cc611), TASK:T002
 
 ---
 
@@ -1129,7 +1129,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Compression/consolidation after time periods
 - Removal based on keywords, times, channels
 
-**Alignment**: [REQ:FR1.3](REQUIREMENTS.md#fr13), [ARCH:CC4.1.1](ARCHITECTURE.md#cc411), [TASK:T014](TASKS.md#t014), [TASK:T019](TASKS.md#t019)
+**Alignment**: [REQ:FR1.3](REQUIREMENTS.md#fr13), [ARCH:CC4.1.1](ARCHITECTURE.md#cc411), TASK:T014, TASK:T019
 
 ---
 
@@ -1147,7 +1147,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Automatic cleanup of expired entries
 - Version-controlled cache keys
 
-**Alignment**: [REQ:NF1.5](REQUIREMENTS.md#nf15), [ARCH:CM1.1](ARCHITECTURE.md#cm11), [TASK:T003](TASKS.md#t003)
+**Alignment**: [REQ:NF1.5](REQUIREMENTS.md#nf15), [ARCH:CM1.1](ARCHITECTURE.md#cm11), TASK:T003
 
 ---
 
@@ -1166,7 +1166,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Configurable retention periods
 - Compression of old logs
 
-**Alignment**: [REQ:FR1.9](REQUIREMENTS.md#fr19), [ARCH:MO1.1](ARCHITECTURE.md#mo11), [TASK:T040](TASKS.md#t040)
+**Alignment**: [REQ:FR1.9](REQUIREMENTS.md#fr19), [ARCH:MO1.1](ARCHITECTURE.md#mo11), TASK:T040
 
 ---
 
@@ -1207,7 +1207,7 @@ System shall provide configurable retention windows for sessions, messages, hist
 - Token counts and timing
 - Request metadata
 
-**Alignment**: [REQ:FR1.2](REQUIREMENTS.md#fr12), [ARCH:CC2.1.1](ARCHITECTURE.md#cc211), [TASK:T022](TASKS.md#t022)
+**Alignment**: [REQ:FR1.2](REQUIREMENTS.md#fr12), [ARCH:CC2.1.1](ARCHITECTURE.md#cc211), TASK:T022
 
 ---
 
@@ -1392,7 +1392,7 @@ Profile concept for this project: expert configurations with LLM settings, promp
 | CFG-03 | The system SHALL support updating an existing expert configuration via the API. |
 | CFG-04 | The system SHALL support deleting an expert configuration via the API. |
 | CFG-05 | Expert configuration CRUD operations SHALL be available as MCP tools with equivalent functionality. |
-| CFG-06 | Expert configuration change events SHALL be broadcast via the A2A interface per **PS-72 §A2A-change-events** (canonical envelope `{type, topic, timestamp, payload}`; reference implementation `cloud_dog_api_kit.a2a.events` ≥0.11.0; see platform-standards `docs/standards/PS-72-agent-to-agent.md`). |
+| CFG-06 | Expert configuration change events SHALL be broadcast via the A2A interface per **PS-72 §A2A-change-events** (canonical envelope `{type, topic, timestamp, payload}`; reference implementation `cloud_dog_api_kit.a2a.events` ≥0.11.0; see public-standards `docs/standards/PS-72-agent-to-agent.md`). |
 | CFG-07 | Expert configuration CRUD operations SHALL be available in the WebUI with RBAC enforcement. |
 | CFG-08 | The system SHALL support creating, reading, updating, and deleting users via the API. |
 | CFG-09 | The system SHALL support creating, reading, updating, and deleting groups with role assignments via the API. |
@@ -1622,7 +1622,7 @@ Mandatory schema per PS-REQ-TEST-TRACE v1.0 §3.4. Every project covers anon-den
 
 ## Recovered domain content — `archive/2026-06-12/DESCRIPTION.md` (142 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/DESCRIPTION.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/DESCRIPTION.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Expert Agent MCP Server - Description
 
@@ -1877,7 +1877,7 @@ Canonical `NF-NNN` rows binding the quality-tier (`QT_COMPLIANCE`) standards-con
 | `NF-001` | `internal` | `must` | Platform-package adoption conformance — the service consumes the approved platform packages (cloud_dog_config / logging / api_kit / idam / db / jobs / llm / vdb / cache / storage) and ships zero bespoke replacements (RULES §1.4; PS-COMMON-SVC-REQ CSR-001). Bound by tests/quality/QT_COMPLIANCE/test_qt_package_adoption.py. |
 | `NF-002` | `internal` | `must` | Configuration & secret-handling conformance — all config flows through cloud_dog_config, secrets resolve from Vault `${vault…}` expressions, defaults/config carry no secrets, and per-tier env files exist (RULES §2/§11; CSR-010). Bound by tests/quality/QT_COMPLIANCE/test_qt_vault_config_contract.py. |
 | `NF-003` | `internal` | `must` | Platform-migration completeness — src/ contains no raw FastAPI app construction, no bespoke auth, no yaml.safe_load for config and no os.environ reads for config (RULES §1.4.1; CSR-001). Bound by tests/quality/QT_COMPLIANCE/test_qt_migration_completeness.py. |
-| `NF-004` | `internal` | `must` | RULES.md / platform-standards compliance — zero hardcoded URLs or credentials, no direct external-library imports, no pytest.skip or mocks in IT/AT, and required file headers + function docstrings present (RULES §2.4/§4.2/§5.3). Bound by tests/quality/QT_COMPLIANCE/test_qt_rules_compliance.py. |
+| `NF-004` | `internal` | `must` | RULES.md / public-standards compliance — zero hardcoded URLs or credentials, no direct external-library imports, no pytest.skip or mocks in IT/AT, and required file headers + function docstrings present (RULES §2.4/§4.2/§5.3). Bound by tests/quality/QT_COMPLIANCE/test_qt_rules_compliance.py. |
 | `NF-005` | `internal` | `must` | Requirements↔test↔code traceability conformance — every requirement maps to tests and source, every test maps to a requirement, the delivery matrix is complete and there are no orphan test files (PS-REQ-TEST-TRACE). Bound by tests/quality/QT_COMPLIANCE/test_qt_traceability.py. |
 
 ## PS-COMMON-SVC-REQ consumption (pinned by reference — W28E-1822)

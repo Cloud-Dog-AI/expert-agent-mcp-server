@@ -221,7 +221,7 @@ CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__OPENSEARCH___TEST___VERIFY_CERTS=false
   "name": "pgvector_store",
   "store_type": "pgvector",
   "config": {
-    "database_uri": "postgresql://user:password@host:5432/database",
+    "database_uri": "postgresql://<user>:<redacted>@host:5432/database",
     "collection_name": "expert_agent_pgvector"
   },
   "enabled": true
@@ -247,7 +247,7 @@ CLOUD_DOG__EXPERT__VECTOR_STORES_CONFIG__OPENSEARCH___TEST___VERIFY_CERTS=false
 
 ### Environment Variables
 ```bash
-CLOUD_DOG__EXPERT__VECTOR__STORES__PGVECTOR__DATABASE_URI=postgresql://user:password@host:5432/database
+CLOUD_DOG__EXPERT__VECTOR__STORES__PGVECTOR__DATABASE_URI=postgresql://<user>:<redacted>@host:5432/database
 CLOUD_DOG__EXPERT__VECTOR__STORES__PGVECTOR__HOST=postgres.example.com
 CLOUD_DOG__EXPERT__VECTOR__STORES__PGVECTOR__PORT=5432
 CLOUD_DOG__EXPERT__VECTOR__STORES__PGVECTOR__DATABASE=expert_agent

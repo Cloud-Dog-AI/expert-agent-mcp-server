@@ -154,7 +154,7 @@ def test_executor_dispatches_expert_bound_grounding_tools(db_session, monkeypatc
     service = ExternalService(
         name="indexretriever0",
         type="mcp",
-        endpoint_url="https://indexretriever0.cloud-dog.net/mcp",
+        endpoint_url="https://index-retriever.example.com/mcp",
     )
     db_session.add(expert)
     db_session.add(service)

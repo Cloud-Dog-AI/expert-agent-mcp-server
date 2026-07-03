@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-21
@@ -111,7 +111,7 @@ Surface set: **api, mcp, a2a, webui**. Stream-C closes each WebUI use case with 
 
 ## Recovered domain content — `archive/2026-06-12/DEMO_USECASES.md` (91 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/DEMO_USECASES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/DEMO_USECASES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Demo Use Cases (AT1.117)
 
@@ -210,7 +210,7 @@ _This section carries forward the full content of the archived predecessor doc v
 
 ## Recovered domain content — `archive/2026-06-12/USE_CASES.md` (16 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/USE_CASES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/USE_CASES.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Expert Agent Use Cases
 

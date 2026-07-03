@@ -16,7 +16,7 @@ _Created by W28C-1710a recovery to receive carry-forward content from `archive/2
 
 ## Recovered domain content — `archive/2026-06-12/ACCEPTED-GAPS.md` (14 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/ACCEPTED-GAPS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/ACCEPTED-GAPS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Accepted Gaps
 
@@ -38,7 +38,7 @@ rationale, and a concrete revisit date.
 
 ## Recovered domain content — `archive/2026-06-12/MIGRATION_PLAN.md` (535 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/MIGRATION_PLAN.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/MIGRATION_PLAN.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Expert Agent MCP Server - Migration Plan
 **Version:** 1.0 • 2025-01-XX
@@ -580,7 +580,7 @@ Migration is complete when:
 
 ## Recovered domain content — `archive/2026-06-12/TASKS.md` (16 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/TASKS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/TASKS.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # Tasks
 

@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-12
@@ -52,7 +52,7 @@ List of tools available via A2A and their MCP-equivalent.
 
 ## Recovered domain content — `archive/2026-06-12/A2A_SERVER.md` (381 lines)
 
-_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `cloud-dog-ai-platform-standards/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/A2A_SERVER.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
+_This section carries forward the full content of the archived predecessor doc verbatim. Topic checklist + SHA256 chain in `public release checklist/working/evidence/W28C-1710a/per-doc/expert-agent-mcp-server/A2A_SERVER.md.topics.tsv`. Archive contents are unchanged (sha256 stable)._
 
 # A2A Server Documentation
 **Version:** 0.1 • 2025-01-XX

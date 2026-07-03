@@ -71,7 +71,7 @@ def test_get_db_uri():
 def test_get_db_uri_mysql_defaults_to_pymysql(monkeypatch):
     """MySQL URI without driver should resolve to pymysql/aiomysql drivers."""
     test_values = {
-        "db.uri": "mysql://user:pass@db1.db.example.com:3306/expert_server",
+        "db.uri": "mysql://<user>:<redacted>@db1.db.example.com:3306/expert_server",
         "db.echo": False,
         "db.pool_size": 5,
         "db.max_overflow": 10,
@@ -89,7 +89,7 @@ def test_get_db_uri_mysql_defaults_to_pymysql(monkeypatch):
 def test_get_db_uri_preserves_unmasked_password(monkeypatch):
     """Resolved DB URLs must preserve credential values for real connections."""
     test_values = {
-        "db.uri": "postgresql://db_user:db_pass@127.0.0.1:5432/expert_server",
+        "db.uri": "postgresql://<user>:<redacted>@127.0.0.1:5432/expert_server",
         "db.echo": False,
         "db.pool_size": 5,
         "db.max_overflow": 10,

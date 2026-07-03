@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-18
@@ -22,21 +22,21 @@ doc-conformance-stamp: 2026-06-18T00:00:00Z
 This document describes the pre-production operator/deployment overlay for this service. The Terraform container environment is the runtime source of truth, and `private/env-PREPROD` is the operator/test overlay used for local control commands and pytest runs against the deployed preprod service. Defaults and non-preprod settings remain documented in `docs/ENV-REFERENCE.md`, `docs/ARCHITECTURE.md`, and `defaults.yaml`.
 
 ## 1. Overview
-- Service URL: `https://expertagent0.cloud-dog.net`
-- Container hostname: `expertagent0.app.vpc0.cloud-dog.net`
-- Health endpoint: `https://expertagent0.cloud-dog.net/health`
-- Docker image: `registry.cloud-dog.net:443/cloud-dog/expert-agent-mcp-server:latest`
-- Active Terraform container definition: `.w28a936-cloud-dog-repo/terraform/server0.viewdeck.com/27 MLAgents/expertagent_containers.tf.json`
-- Active Terraform image definition: `.w28a936-cloud-dog-repo/terraform/server0.viewdeck.com/27 MLAgents/docker_images.tf.json`
+- Service URL: `https://expert-agent.example.com`
+- Container hostname: `expertagent0.example.invalid`
+- Health endpoint: `https://expert-agent.example.com/health`
+- Docker image: `registry.example.invalid/cloud-dog/expert-agent-mcp-server:latest`
+- Active Terraform container definition: `.w28a936-example-deploy-repo/terraform/docker-host.example.invalid/27 MLAgents/expertagent_containers.tf.json`
+- Active Terraform image definition: `.w28a936-example-deploy-repo/terraform/docker-host.example.invalid/27 MLAgents/docker_images.tf.json`
 - Operator overlay file: `./expert-agent-mcp-server/private/env-PREPROD`
 
 ### Port allocation
 | Surface | Internal port | External URL |
 |---|---:|---|
-| Web UI | 8080 | `https://expertagent0.cloud-dog.net` |
-| MCP | 8081 | `https://expertagent0.cloud-dog.net/mcp` |
-| A2A | 8082 | `wss://expertagent0.cloud-dog.net/a2a` |
-| API | 8083 | `https://expertagent0.cloud-dog.net/api` |
+| Web UI | 8080 | `https://expert-agent.example.com` |
+| MCP | 8081 | `https://expert-agent.example.com/mcp` |
+| A2A | 8082 | `wss://expert-agent.example.com/a2a` |
+| API | 8083 | `https://expert-agent.example.com/api` |
 
 ## 2. Configuration
 Section 2 documents the full preprod environment surface that differs from or materially specialises the defaults. Use it together with `defaults.yaml` and `docs/ENV-REFERENCE.md` when tracing a value through the precedence chain `os.environ -> --env file -> config.yaml -> defaults.yaml`.
@@ -91,7 +91,7 @@ This service reads preprod secrets from the shared Vault config blob at `cloud_d
 
 ### Operator setup
 ```bash
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 vault kv get -mount=cloud_dog_ai config
 ```
 
@@ -124,7 +124,7 @@ The project rules forbid ad-hoc `docker build`; use the repo entrypoint script.
 
 1. Load Vault-backed build credentials.
 ```bash
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 ```
 2. Build the image.
 ```bash
@@ -132,17 +132,17 @@ cd ./expert-agent-mcp-server && bash docker-build.sh latest
 ```
 3. Tag and push the image.
 ```bash
-docker push registry.cloud-dog.net:443/cloud-dog/expert-agent-mcp-server:latest
+docker push registry.example.invalid/cloud-dog/expert-agent-mcp-server:latest
 ```
 4. Plan and apply the Terraform update from the shared preprod workspace.
 ```bash
-cd '/opt/iac/Development/cloud-dog-ai/.w28a936-cloud-dog-repo/terraform/server0.viewdeck.com/27 MLAgents'
+cd '/path/to/cloud-dog-ai/.w28a936-example-deploy-repo/terraform/docker-host.example.invalid/27 MLAgents'
 terraform plan -target=docker_image.expertagent -target=docker_container.expertagent0 -out=tfplan.out
 terraform apply tfplan.out
 ```
 5. Verify the deployed service.
 ```bash
-curl -fsS https://expertagent0.cloud-dog.net/health
+curl -fsS https://expert-agent.example.com/health
 ```
 
 ## 6. Testing Against Preprod
@@ -157,6 +157,6 @@ Known limitations:
 - Avoid destructive AT flows against shared session/knowledge data unless explicitly scheduled.
 
 ## 7. Troubleshooting
-- `curl -fsS https://expertagent0.cloud-dog.net/health` should return `status=healthy`.
-- `docker logs expertagent0.app.vpc0.cloud-dog.net` is not the normal access path; use Terraform state plus the remote Docker host when investigating container runtime issues.
+- `curl -fsS https://expert-agent.example.com/health` should return `status=healthy`.
+- `docker logs expertagent0.example.invalid` is not the normal access path; use Terraform state plus the remote Docker host when investigating container runtime issues.
 - `./server_control.sh --env private/env-PREPROD status` validates local overlay loading before remote tests.

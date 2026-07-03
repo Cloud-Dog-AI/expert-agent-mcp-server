@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 # document-side (per-project) — stamped at migration, refreshed by check-docs-conformance.sh
 project: expert-agent-mcp-server

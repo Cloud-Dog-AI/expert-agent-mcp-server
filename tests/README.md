@@ -51,7 +51,7 @@ Each test folder may contain subfolders for:
 
 - [docs/TESTS.md](../docs/TESTS.md) - Comprehensive test plan
 - [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md) - Requirements (tests validate requirements)
-- [docs/TASKS.md](../docs/TASKS.md) - Tasks (tests confirm delivery)
+- docs/TASKS.md - Tasks (tests confirm delivery)
 - [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Architecture (tests validate architecture)
 - [RULES.md](../RULES.md) - Project rules and folder structure
 

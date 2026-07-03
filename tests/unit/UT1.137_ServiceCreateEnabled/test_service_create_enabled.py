@@ -24,7 +24,7 @@ def test_create_service_sets_enabled(db_session):
     svc = mgr.create_service(
         name="ut1137_indexretriever0",
         service_type="mcp",
-        endpoint_url="https://indexretriever0.cloud-dog.net/mcp",
+        endpoint_url="https://index-retriever.example.com/mcp",
         auth_config={"type": "api_key"},
     )
     assert svc.id is not None

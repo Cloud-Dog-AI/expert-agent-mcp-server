@@ -2,7 +2,7 @@
 
 Release: **1.0RC01** · Tag: `1.0RC01-expert-agent-mcp-server` · Lane: W28E-1809C (Stream-C WebUI/E2E/release)
 Service version: `0.1.1RC1` · Deployed image digest: `sha256:290d9679f0e619db2ae968daa0372062c3094adca3236cc68b61afab8c0774d6`
-Preprod: `https://expertagent0.cloud-dog.net` (server0.viewdeck.com /27 MLAgents · container `expertagent0`)
+Preprod: `https://expert-agent.example.com` (docker-host.example.invalid /27 MLAgents · container `expertagent0`)
 
 ## Scope
 

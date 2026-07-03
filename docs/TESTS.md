@@ -555,7 +555,7 @@ All 33 residual orphan markers left by the W28C-1711-R3 cleanup are replaced wit
 | `tests/quality/QT_COMPLIANCE/test_qt_package_adoption.py` | 8 | `NF-001` | platform-package adoption conformance |
 | `tests/quality/QT_COMPLIANCE/test_qt_vault_config_contract.py` | 6 | `NF-002` | config & secret-handling conformance |
 | `tests/quality/QT_COMPLIANCE/test_qt_migration_completeness.py` | 4 | `NF-003` | platform-migration completeness |
-| `tests/quality/QT_COMPLIANCE/test_qt_rules_compliance.py` | 7 | `NF-004` | RULES.md / platform-standards compliance |
+| `tests/quality/QT_COMPLIANCE/test_qt_rules_compliance.py` | 7 | `NF-004` | RULES.md / public-standards compliance |
 | `tests/quality/QT_COMPLIANCE/test_qt_traceability.py` | 5 | `NF-005` | requirement↔test↔code traceability conformance |
 | `tests/application/AT1.102_ResponseQualityEvaluation/…`, `tests/system/ST1.39_…`, `tests/integration/IT2.32_…` | 3 | `FR-023` | response-quality evaluation/scoring |
 

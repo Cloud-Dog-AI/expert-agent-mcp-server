@@ -11,7 +11,7 @@ extends: PS-TEST-PACKS-REGISTRY v1.0
 
 ## Registry Source
 
-Central registry: `cloud-dog-ai-platform-standards/test-packs/REGISTRY.tsv`.
+Central registry: `public release checklist/test-packs/REGISTRY.tsv`.
 Per PS-TEST-PACKS-REGISTRY §6 expert-agent-mcp-server consumes `TP-AJOBS`,
 `TP-COMMON` and `TP-INTEGRATION-EXAMPLES`. There is **no expert-agent-specific
 zip** in the Test-Design-Audit-Jun26 dump; the service-specific pack column is

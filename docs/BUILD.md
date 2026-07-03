@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-18
@@ -25,7 +25,7 @@ doc-conformance-stamp: 2026-06-18T00:00:00Z
 - Python `3.10+`
 - Docker + Docker Compose
 - Access to Cloud-Dog private PyPI
-- Vault bootstrap file: `../env-vault`
+- Vault bootstrap file: `../env-public`
 
 ## 2. Virtual Environment Setup
 
@@ -52,7 +52,7 @@ If you need platform fallback index chaining:
 ## 4. Vault Environment Bootstrap
 
 ```bash
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 bash scripts/validate-vault.sh
 ```
 
@@ -97,11 +97,11 @@ docker compose build
 .venv/bin/python -m pytest tests/system --env tests/env-ST -q
 
 # Integration
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 .venv/bin/python -m pytest tests/integration --env tests/env-IT -q
 
 # Application
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 .venv/bin/python -m pytest tests/application --env tests/env-AT -q
 ```
 
@@ -127,7 +127,7 @@ Use the tier-matching env file for each run (`env-ST`, `env-IT`, `env-AT`).
 
 ```bash
 cd ./expert-agent-mcp-server
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 bash docker-build.sh latest
 docker push <internal-registry>:443/cloud-dog/expert-agent-mcp-server:latest
 ```

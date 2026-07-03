@@ -89,7 +89,7 @@ async def validate_postgres():
         load_config.cache_clear()
         database_uri = get_config(
             "vector_stores_config.pgvector._TEST_.database_uri",
-            "postgresql://expert_test_user:ExpertTest2024!@db2.db.example.com:5432/expert_agent_test",
+            "postgresql://<user>:<redacted>@db2.db.example.com:5432/expert_agent_test",
         )
 
         config = {

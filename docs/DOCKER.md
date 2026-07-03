@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: platform-standards
+template-owner: public-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-18
@@ -21,7 +21,7 @@ doc-conformance-stamp: 2026-06-18T00:00:00Z
 
 ## Build
 ```bash
-set -a; source ../env-vault; set +a
+set -a; source ../env-public; set +a
 bash docker-build.sh latest
 ```
 
