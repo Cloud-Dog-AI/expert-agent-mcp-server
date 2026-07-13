@@ -6,7 +6,7 @@ registry: service
 required: must-have
 when-applicable: ""
 template-last-updated: 2026-06-12
-template-owner: public-standards
+template-owner: platform-standards
 
 project: expert-agent-mcp-server
 doc-last-updated: 2026-06-18

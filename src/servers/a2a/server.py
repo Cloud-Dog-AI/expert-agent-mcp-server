@@ -364,7 +364,7 @@ class ConnectionManager:
             "experts": "Expert configuration events",
             "users": "User configuration events",
             "groups": "Group configuration events",
-            "api_keys": "<api-key>",
+            "api_keys": "API key configuration events",
             "jobs": "Job status events",
             "system": "System status events",
         }
@@ -482,44 +482,30 @@ class A2AServer(BaseServer):
                 return ("The document process could not be started due to an internal error. "
                         "No document was generated and no delivery was claimed.")
 
-        # W28M-1606: additive chat entry to the layered scheduled-demo capability —
-        # the SAME run_research_document capability the scheduler invokes, so the
-        # chat-client path and the scheduled path produce equivalent quality (chat
-        # parity). Additive only; nothing above is changed.
-        async def _a2a_run_research_document(text: str) -> str:
-            import re as _re
-            from src.core.agentic.research_document import run_research_document, DOC_TOPICS
-            low = (text or "").lower()
-            topic = None
-            if "nato" in low:
-                topic = "nato-doctrine"
-            elif ("report" in low or "document" in low) and ("transparent" in low or "border" in low):
-                topic = "transparent-borders-report"
-            elif "transparent" in low or "border" in low:
-                topic = "transparent-borders"
-            elif "ukraine" in low:
-                topic = "ukraine"
-            topic = topic or next((t for t in DOC_TOPICS if t.replace("-", " ") in low), None)
-            if not topic:
-                return ("Which scheduled demo report would you like? Options: ukraine, "
-                        "transparent-borders, transparent-borders-report, nato-doctrine.")
-            m = _re.search(r"\bfor\s+([A-Za-z][A-Za-z -]{2,})", text or "")
-            target = m.group(1).strip().lower().replace(" ", "-") if m else None
-            deliver = any(w in low for w in ("send", "deliver", "email", "recipients", "notify"))
+        async def _a2a_research_match_event(text: str) -> str:
+            from src.core.expert.research_expert import on_match_event
+            from src.database.connection import get_db
+
+            db_gen = get_db()
+            db = next(db_gen)
             try:
-                res = await run_research_document(topic=topic, target=target,
-                                                  deliver=deliver, async_mode=True)
-                return (f"Started the layered full-depth {topic} research document "
-                        f"(run id {res.get('run_id')}, target {res.get('target')}). It is web-grounded and "
-                        f"generated to the W28M-1604 quality bar (>=0.9x depth, comparator tables, cited sources, "
-                        f"plain-english + humanise correction)"
-                        + (" and will be delivered to the configured recipients on completion." if deliver
-                           else "; delivery was not requested.")
-                        + " Poll status with get_research_document_status using the run id.")
-            except Exception as exc:
-                logger.error(f"run_research_document failed: {exc}", exc_info=True)
-                return ("The research document could not be started due to an internal error. "
-                        "No document was generated and no delivery was claimed.")
+                result = await on_match_event(text, db=db)
+                return json.dumps(result, default=str)
+            except Exception as exc:  # never leak a stack trace into A2A callers
+                logger.error(f"research_expert.on_match_event failed: {exc}", exc_info=True)
+                return json.dumps(
+                    {
+                        "status": "failed",
+                        "action": "research_expert.on_match_event",
+                        "error": "internal error",
+                    }
+                )
+            finally:
+                db.close()
+                try:
+                    db_gen.close()
+                except Exception:
+                    pass
 
         # A2A agent card and task submission router
         _a2a_skills = [
@@ -531,11 +517,15 @@ class A2AServer(BaseServer):
                                  "France, and send to all recipients, return here confirmation of delivery'): "
                                  "intent-parse, IDAM-gate, generate+correct+deliver, and confirm in chat.",
                      handler=_a2a_run_document_process),
-            A2ASkill(id="run_research_document", name="Run Research Document",
-                     description="Chat entry to the W28M-1606 layered scheduled demo: web-grounded research + "
-                                 "full-depth W28M-1604 report for a topic (e.g. 'generate the transparent-borders "
-                                 "report for poland and send it'). Same capability the scheduler runs (chat parity).",
-                     handler=_a2a_run_research_document),
+            A2ASkill(
+                id="research_expert.on_match_event",
+                name="Research Match Event",
+                description=(
+                    "Triage a search-mcp streaming-watch matched article event "
+                    "and decide next action."
+                ),
+                handler=_a2a_research_match_event,
+            ),
         ]
         _a2a_card_router = create_a2a_card_router(
             name="expert-agent",

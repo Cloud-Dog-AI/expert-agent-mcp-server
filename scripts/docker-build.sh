@@ -309,9 +309,16 @@ if [ "${VARIANT}" = "public" ]; then
     # as the PIP_INDEX_URL build ARG.
     PUBLIC_INDEX_URL="${PIP_INDEX_URL:-${PYPI_URL:-https://pypi.org/simple/}}"
     case "${PUBLIC_INDEX_URL}" in
+        *Cloud-Dog-External*)
+            # The Gitea publication boundary (Cloud-Dog-External namespace) is the
+            # legitimate EXTERNAL single-index used to resolve build-to-latest before
+            # the public GHCR/pypi.org release. It is not an internal index — allow it.
+            # (Consistent with the other 8 services' public boundary builds.)
+            :
+            ;;
         *cloud-dog.net*|*.vpc*|*.dmz*)
             echo -e "${RED}ERROR: public build index must not point at an internal Cloud-Dog host (got: ${PUBLIC_INDEX_URL}).${NC}" >&2
-            echo -e "${RED}       Supply PIP_INDEX_URL pointing at a public/boundary index.${NC}" >&2
+            echo -e "${RED}       Supply PIP_INDEX_URL pointing at a public/boundary index (pypi.org or the Cloud-Dog-External boundary).${NC}" >&2
             exit 2
             ;;
     esac
@@ -364,7 +371,14 @@ EOF
 fi
 
 # Execute docker build
+# ── W28C-1719 publish-before-pin guard + revision label (fail-closed) ──
+_PBP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_PBP_ROOT="$(cd "${_PBP_DIR}/.." && pwd)"
+PIP_CONFIG_FILE="${PIP_CONF}" "${_PBP_DIR}/publish-before-pin-guard.sh" "${_PBP_ROOT}" || exit $?
+_PBP_REV="$(git -C "${_PBP_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+
 if DOCKER_BUILDKIT=1 docker build --network="$DOCKER_BUILD_NETWORK" -t "$IMAGE_NAME:$IMAGE_TAG" \
+    --label "org.opencontainers.image.revision=${_PBP_REV}" \
     -f "$DOCKERFILE" \
     $PIP_CONF_SECRET_ARG \
     $BUILD_ARGS \

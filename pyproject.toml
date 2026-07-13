@@ -13,17 +13,18 @@ authors = [
 ]
 dependencies = [
     # Platform packages
-    "cloud-dog-config>=0.3.1",
-    "cloud-dog-logging>=0.3.3",
+    # W28P-2406A: exact pins are mirror-proven before use.
+    "cloud-dog-config==0.3.4",
+    "cloud-dog-logging==0.4.1",
     "cloud-dog-api-kit==0.13.0",
-    "cloud-dog-idam>=0.5.2,<0.6",
-    "cloud-dog-llm>=0.2.1",
-    "cloud-dog-db>=0.1.0",
-    "cloud-dog-jobs>=0.3.0",
+    "cloud-dog-idam==0.5.3",
+    "cloud-dog-llm==0.4.0",
+    "cloud-dog-db==0.3.2",
+    "cloud-dog-jobs==0.4.2",
     "cloud-dog-vdb>=0.5.0",
-    "cloud-dog-cache>=0.1.1",
-    "cloud-dog-storage>=0.1.1",
-    "cloud-dog-agent>=0.2.0",  # W28B-319 D5: optional prompt-engineering store delegation (lazy import)
+    "cloud-dog-cache==0.2.1",
+    "cloud-dog-storage==0.1.8",
+    "cloud-dog-agent==0.3.2",  # W28B-319 D5: optional prompt-engineering store delegation (lazy import)
 
     # Existing runtime dependencies from requirements.txt
     "fastapi>=0.68.0",
@@ -49,7 +50,7 @@ dependencies = [
     "PyJWT>=2.0.0",
     "passlib>=1.7.0",
     "bcrypt>=3.2.0",
-    "python-multipart>=0.0.5",
+    "python-multipart>=0.0.30",
     "cryptography>=46.0.0",
     "jinja2>=3.0.0",
     "starlette>=0.14.0",

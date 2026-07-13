@@ -27,6 +27,16 @@ from src.core.session.manager import SessionManager
 from src.database.connection import get_db
 
 
+def _strip_think(text: Any) -> str:
+    """Remove qwen3-style ``<think>...</think>`` chain-of-thought blocks from model
+    output (and a leading unmatched ``<think>`` when the budget truncated the close
+    tag), so reasoning never leaks into documents, JSON envelopes or deliveries."""
+    s = str(text or "")
+    s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
+    s = re.sub(r"<think>.*$", "", s, flags=re.DOTALL)  # truncated/unclosed think block
+    return s.strip()
+
+
 class TransactionalExecutor:
     """Execute a single expert interaction without requiring a long-lived session."""
 
@@ -35,6 +45,7 @@ class TransactionalExecutor:
         db: Optional[Session] = None,
         llm_manager: Optional[LLMManager] = None,
     ):
+        """Create the transactional executor and bind service managers."""
         self.db = db
         self.llm_manager = llm_manager or LLMManager()
         self.expert_manager = ExpertManager(db)
@@ -44,6 +55,7 @@ class TransactionalExecutor:
         self.delegation_manager = DelegationManager(db)
 
     def _get_db(self) -> Session:
+        """Return the bound DB session or open one from the configured provider."""
         if self.db:
             return self.db
         db_gen = get_db()
@@ -51,6 +63,7 @@ class TransactionalExecutor:
 
     @staticmethod
     def _coerce_float(value: Any, default: float) -> float:
+        """Coerce ``value`` to float, falling back to ``default`` on bad input."""
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -58,6 +71,7 @@ class TransactionalExecutor:
 
     @staticmethod
     def _coerce_int(value: Any, default: int) -> int:
+        """Coerce ``value`` to int, falling back to ``default`` on bad input."""
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -78,6 +92,15 @@ class TransactionalExecutor:
             if not token_match:
                 raise KeyError(expression)
             attr, index = token_match.groups()
+            # Auto-parse a JSON string when navigating INTO it, so a tool result carried as a
+            # JSON string (e.g. an MCP `content[0].text` or an execute_code `stdout`) can be
+            # navigated like a structure: `...content[0].text.data.items[0]`. Pure whole-token
+            # references (no further navigation) are unaffected and still return the raw string.
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (ValueError, TypeError):
+                    pass
             if attr is not None:
                 if not isinstance(value, dict) or attr not in value:
                     raise KeyError(expression)
@@ -91,12 +114,14 @@ class TransactionalExecutor:
 
     @staticmethod
     def _stringify_interpolation_value(value: Any) -> str:
+        """Render interpolation results as deterministic strings."""
         if isinstance(value, (dict, list)):
             return json.dumps(value, sort_keys=True)
         return "" if value is None else str(value)
 
     @staticmethod
     def _interpolate_value(value: Any, variables: Dict[str, Any]) -> Any:
+        """Resolve ``${...}`` placeholders in JSON-like service-call arguments."""
         if isinstance(value, dict):
             return {
                 str(k): TransactionalExecutor._interpolate_value(v, variables)
@@ -115,6 +140,7 @@ class TransactionalExecutor:
                     return value
 
             def replace(match: re.Match[str]) -> str:
+                """Replace one embedded interpolation token, preserving unknown tokens."""
                 try:
                     return TransactionalExecutor._stringify_interpolation_value(
                         TransactionalExecutor._lookup_interpolation_path(
@@ -172,19 +198,138 @@ class TransactionalExecutor:
 
     @classmethod
     def _is_grounding_tool(cls, tool_name: Any) -> bool:
+        """Return true when a tool name is safe for automatic grounding."""
         return str(tool_name).strip().lower() in cls._GROUNDING_TOOLS
 
     @staticmethod
+    def _brief_type_from_request(input_text: str, parameters: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        params = parameters or {}
+        for key in ("type", "brief_type", "intel_type", "collection_type"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip().lower() in {"military", "financial", "political", "uk"}:
+                return value.strip().lower()
+        lowered = str(input_text or "").lower()
+        for value in ("military", "financial", "political", "uk"):
+            if re.search(rf"\b{re.escape(value)}\b", lowered):
+                return value
+        return None
+
+    @classmethod
+    def _resolve_collection_template(
+        cls,
+        template: Optional[str],
+        input_text: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        if not template:
+            return None
+        resolved = str(template)
+        brief_type = cls._brief_type_from_request(input_text, parameters)
+        if "${type}" in resolved:
+            if not brief_type:
+                return resolved
+            resolved = resolved.replace("${type}", brief_type)
+        return resolved
+
+    @staticmethod
+    def _safe_argument_metadata(arguments: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: arguments[key]
+            for key in ("profile", "collection", "channel", "query")
+            if arguments.get(key) not in (None, "")
+        }
+
+    @staticmethod
+    def _normalise_result_payload(value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("data:"):
+                text = "\n".join(
+                    line[5:].strip()
+                    for line in text.splitlines()
+                    if line.strip().startswith("data:")
+                ).strip()
+            if text and text[:1] in "[{":
+                try:
+                    return json.loads(text)
+                except Exception:
+                    return value
+        return value
+
+    @classmethod
+    def _extract_invocation_summary(cls, result: Any) -> Dict[str, Any]:
+        payload = cls._normalise_result_payload(result)
+        if isinstance(payload, dict):
+            for key in ("result", "structuredContent", "data"):
+                if key in payload:
+                    nested = cls._extract_invocation_summary(payload[key])
+                    if nested:
+                        return nested
+            if isinstance(payload.get("content"), list):
+                for block in payload["content"]:
+                    if isinstance(block, dict) and "text" in block:
+                        nested = cls._extract_invocation_summary(block["text"])
+                        if nested:
+                            return nested
+
+        containers: List[Any] = []
+        if isinstance(payload, dict):
+            for key in ("chunks", "items", "results", "documents", "matches"):
+                if isinstance(payload.get(key), list):
+                    containers.append(payload[key])
+        elif isinstance(payload, list):
+            containers.append(payload)
+
+        result_count = None
+        chunk_ids: List[str] = []
+        source_ids: List[str] = []
+        for items in containers:
+            if result_count is None:
+                result_count = len(items)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                for key, target in (
+                    ("chunk_id", chunk_ids),
+                    ("chunk_ids", chunk_ids),
+                    ("source_id", source_ids),
+                    ("source_ids", source_ids),
+                    ("document_id", source_ids),
+                ):
+                    value = item.get(key)
+                    if value is None:
+                        continue
+                    values = value if isinstance(value, list) else [value]
+                    for v in values:
+                        text = str(v)
+                        if text and text not in target:
+                            target.append(text)
+        summary: Dict[str, Any] = {}
+        if result_count is not None:
+            summary["result_count"] = result_count
+        if chunk_ids:
+            summary["chunk_ids"] = chunk_ids[:20]
+        if source_ids:
+            summary["source_ids"] = source_ids[:20]
+        return summary
+
+    @classmethod
     def _build_tool_arguments(
-        entry: Dict[str, Any], tool_name: str, input_text: str
+        cls,
+        entry: Dict[str, Any],
+        tool_name: str,
+        input_text: str,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build invocation arguments for a bound grounding tool."""
         args: Dict[str, Any] = {}
         name = str(tool_name).strip().lower()
         if name in {"search", "retrieve", "query", "fetch", "lookup"}:
             args["query"] = input_text
-        if entry.get("default_collection"):
-            args["collection"] = entry["default_collection"]
+        collection_template = entry.get("collection_template") or entry.get("default_collection")
+        collection = cls._resolve_collection_template(collection_template, input_text, parameters)
+        if collection:
+            args["collection"] = collection
         if entry.get("default_profile"):
             args["profile"] = entry["default_profile"]
         if entry.get("default_channel"):
@@ -193,8 +338,51 @@ class TransactionalExecutor:
             args.update(entry["arguments"])
         return args
 
+    @classmethod
+    def _enrich_service_invocation(
+        cls,
+        result: Any,
+        service_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        record: Dict[str, Any] = dict(result) if isinstance(result, dict) else {"result": result}
+        record.setdefault("service_name", service_name)
+        record.setdefault("tool_name", tool_name)
+        record.setdefault("status", "ok")
+        safe_args = cls._safe_argument_metadata(arguments)
+        if safe_args:
+            record["arguments"] = safe_args
+        for key in ("profile", "collection", "channel"):
+            if arguments.get(key) not in (None, ""):
+                record[key] = arguments[key]
+        record.update({k: v for k, v in cls._extract_invocation_summary(result).items() if k not in record})
+        return record
+
+    @classmethod
+    def _enrich_explicit_service_invocation(
+        cls,
+        result: Any,
+        service_id: int,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        record: Dict[str, Any] = dict(result) if isinstance(result, dict) else {"result": result}
+        record.setdefault("service_id", service_id)
+        record.setdefault("tool_name", tool_name)
+        record.setdefault("status", "ok")
+        safe_args = cls._safe_argument_metadata(arguments)
+        if safe_args:
+            record["arguments"] = safe_args
+        for key in ("profile", "collection", "channel"):
+            if arguments.get(key) not in (None, ""):
+                record[key] = arguments[key]
+        record.update(cls._extract_invocation_summary(result))
+        return record
+
     @staticmethod
     def _expert_access_control(expert: Any) -> Dict[str, Any]:
+        """Decode an expert's access-control JSON as a dictionary."""
         raw = getattr(expert, "access_control_json", None)
         if not raw:
             return {}
@@ -209,6 +397,7 @@ class TransactionalExecutor:
         input_text: str,
         auth_context: Optional[Dict[str, Any]],
         session_obj: Any,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """EA4: auto-invoke the expert's bound grounding tools (cross-service fan-out).
 
@@ -256,7 +445,7 @@ class TransactionalExecutor:
                     }
                 )
                 continue
-            arguments = self._build_tool_arguments(entry, str(tool_name), input_text)
+            arguments = self._build_tool_arguments(entry, str(tool_name), input_text, parameters)
             try:
                 result = await self.service_manager.invoke_tool(
                     service_id=int(service.id),
@@ -265,16 +454,23 @@ class TransactionalExecutor:
                     auth_context=auth_context,
                     session_id=session_obj.id if session_obj else None,
                 )
-                invoked.append(result)
-            except Exception as exc:
                 invoked.append(
-                    {
-                        "service_name": service_name,
-                        "tool_name": tool_name,
-                        "status": "failed",
-                        "error": str(exc),
-                    }
+                    self._enrich_service_invocation(
+                        result,
+                        str(service_name),
+                        str(tool_name),
+                        arguments,
+                    )
                 )
+            except Exception as exc:
+                failure = {
+                    "service_name": service_name,
+                    "tool_name": tool_name,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+                failure.update(self._safe_argument_metadata(arguments))
+                invoked.append(failure)
         return invoked
 
     @staticmethod
@@ -427,9 +623,15 @@ class TransactionalExecutor:
         existing_session_id: Optional[int] = None,
         delegation_depth: int = 0,
     ) -> Dict[str, Any]:
+        """Run the transactional execution after audit wrapping has been set up."""
         params = parameters or {}
         ctx = context or {}
         started = time.perf_counter()
+        # PS-96 §3: a non-simple agent_strategy means the cloud_dog_agent loop drives
+        # the expert's bound tools itself, so the single-shot grounding helpers
+        # (EA4 auto-invoke of bound tools, prior-turn assembly) must NOT pre-fire.
+        agent_strategy = str(params.get("agent_strategy") or "simple").strip().lower()
+        is_agent_run = bool(agent_strategy and agent_strategy != "simple")
 
         expert = self.expert_manager.get_expert(expert_id=expert_id)
         if not expert:
@@ -480,16 +682,25 @@ class TransactionalExecutor:
                 auth_context=auth_context,
                 session_id=session_obj.id if session_obj else None,
             )
-            services_invoked.append(service_result)
+            services_invoked.append(
+                self._enrich_explicit_service_invocation(
+                    service_result,
+                    int(item["service_id"]),
+                    str(item["tool_name"]),
+                    resolved_arguments,
+                )
+            )
 
         # EA4 (W28M-FIX-1615): auto-invoke the expert's own bound grounding tools
         # so the response is grounded in cross-service evidence even when the
-        # caller passed no explicit service_tool_calls.
-        expert_tool_results = await self._dispatch_expert_tools(
-            expert, input_text, auth_context, session_obj
-        )
-        if expert_tool_results:
-            services_invoked.extend(expert_tool_results)
+        # caller passed no explicit service_tool_calls. Skipped for agent runs —
+        # there the loop decides which bound tools to call, with what arguments.
+        if not is_agent_run:
+            expert_tool_results = await self._dispatch_expert_tools(
+                expert, input_text, auth_context, session_obj, params
+            )
+            if expert_tool_results:
+                services_invoked.extend(expert_tool_results)
 
         for item in params.get("delegations", []) or []:
             if not session_obj:
@@ -534,6 +745,33 @@ class TransactionalExecutor:
             api_key=llm_params.get("api_key"),
         )
 
+        # Per-expert LLM config (each agent carries its OWN context window, output
+        # budget, temperature and think mode). Without an adequate num_ctx / num_predict
+        # a reasoning model (qwen3) silently truncates the prompt or spends its whole
+        # budget thinking and returns empty/garbage. Call-time `parameters` override
+        # the expert defaults; the expert defaults override the service config.
+        def _llm_opt(*keys: str, default: Any = None) -> Any:
+            """Resolve an LLM option from call parameters, expert params, then default."""
+            for k in keys:
+                if params.get(k) is not None:
+                    return params.get(k)
+            for k in keys:
+                if llm_params.get(k) is not None:
+                    return llm_params.get(k)
+            return default
+
+        eff_temperature = self._coerce_float(_llm_opt("temperature", default=get_config("llm.temperature")), 0.7)
+        eff_max_tokens = self._coerce_int(_llm_opt("max_tokens", "num_predict", default=get_config("llm.max_tokens")), 1024)
+        eff_num_ctx = _llm_opt("num_ctx", default=get_config("llm.num_ctx"))
+        eff_think = bool(_llm_opt("think", default=llm_params.get("think") or False))
+        llm_extra: Dict[str, Any] = {"num_predict": eff_max_tokens}
+        if eff_num_ctx:
+            llm_extra["num_ctx"] = self._coerce_int(eff_num_ctx, 8192)
+        if eff_think:
+            llm_extra["think"] = True
+        self._llm_cfg = {"temperature": eff_temperature, "max_tokens": eff_max_tokens,
+                         "num_ctx": llm_extra.get("num_ctx"), "think": eff_think}
+
         messages = []
         if prompt:
             messages.append({"role": "system", "content": prompt})
@@ -563,18 +801,35 @@ class TransactionalExecutor:
             )
         messages.append({"role": "user", "content": input_text})
 
-        response = await self.llm_manager.generate(
-            messages=messages,
-            temperature=self._coerce_float(
-                params.get("temperature") or get_config("llm.temperature"), 0.7
-            ),
-            max_tokens=self._coerce_int(
-                params.get("max_tokens") or get_config("llm.max_tokens"), 512
-            ),
-        )
+        # PS-96 §3: an opt-in `agent_strategy` DATA parameter selects a
+        # cloud_dog_agent strategy loop instead of the default single shot.
+        # Omitted / "simple" preserves the existing behaviour exactly.
+        if is_agent_run:
+            from src.core.execution.strategy import run_agent_strategy
+
+            response = await run_agent_strategy(
+                strategy=agent_strategy,
+                db=self._get_db(),
+                executor=self,
+                expert=expert,
+                system_prompt=prompt,
+                input_text=input_text,
+                params=params,
+                auth_context=auth_context,
+                llm_cfg=self._llm_cfg,
+            )
+        else:
+            response = await self.llm_manager.generate(
+                messages=messages,
+                temperature=eff_temperature,
+                max_tokens=eff_max_tokens,
+                **{k: v for k, v in llm_extra.items() if k != "num_predict"},
+            )
+        if response.get("services_invoked"):
+            services_invoked.extend(response.get("services_invoked") or [])
 
         post_service_results: List[Dict[str, Any]] = []
-        output_text = response.get("content", "")
+        output_text = _strip_think(response.get("content", ""))
         interpolation_vars = {
             "input_text": input_text,
             "output_text": output_text,
@@ -596,7 +851,14 @@ class TransactionalExecutor:
                 auth_context=auth_context,
                 session_id=session_obj.id if session_obj else None,
             )
-            services_invoked.append(service_result)
+            services_invoked.append(
+                self._enrich_explicit_service_invocation(
+                    service_result,
+                    int(item["service_id"]),
+                    str(item["tool_name"]),
+                    resolved_arguments,
+                )
+            )
             post_service_results.append(service_result)
             interpolation_vars["services_invoked"] = services_invoked
             interpolation_vars["service_results"] = services_invoked
@@ -613,7 +875,7 @@ class TransactionalExecutor:
                 metadata={"transactional": True},
             )
 
-        return {
+        result = {
             "expert_id": expert_id,
             "output_text": output_text,
             "token_usage": response.get("tokens_used"),
@@ -625,3 +887,9 @@ class TransactionalExecutor:
             "session_id": session_obj.id if session_obj else None,
             "mode": "transactional",
         }
+        if is_agent_run:
+            result["agent_strategy"] = agent_strategy
+            result["agent_trace"] = response.get("agent_trace") or {"strategy": agent_strategy}
+            if response.get("warnings"):
+                result["warnings"] = response.get("warnings")
+        return result

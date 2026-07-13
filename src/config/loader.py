@@ -230,6 +230,13 @@ def _project_transform(compiled: dict[str, Any]) -> dict[str, Any]:
         "vector_stores",
         "vector_stores_config",
         "code_runner",
+        "dev",
+        # Surface CLOUD_DOG__EXPERT__RESEARCH__* env overrides (compiled under expert.research.*)
+        # through the top-level research.* section the runtime reads via get_config("research.*").
+        # Needed so the IaC-supplied CLOUD_DOG__EXPERT__RESEARCH__DEFAULT_TO reaches
+        # research.default_to (W28M-1608). No value is set here — config plumbing only.
+        "research",
+        "service_credentials",
     )
     for section_name in legacy_runtime_sections:
         expert_section = expert_cfg.get(section_name)

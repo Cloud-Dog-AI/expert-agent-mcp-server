@@ -122,6 +122,16 @@ service_composition:
 # in defaults.yaml or the external_services table.
 service_credentials: {}
 
+dev:
+  services:
+    searchmcp:
+      # Managed ExternalService row `search-mcp` reads these keys. Real values
+      # are injected from Vault/config at runtime; the API key default stays empty.
+      # Public default is a non-internal placeholder; the internal host is supplied at
+      # runtime via CLOUD_DOG__EXPERT__DEV__SERVICES__SEARCHMCP__URI (see docker-env.internal.example).
+      uri: "https://<search-host>.example.com/mcp"
+      api_key: ""
+
 # W28M-1605 agentic document-process chat-action interface.
 # Drives the W28M-1604 document-generation capability from one natural-language
 # instruction (the run_document_process A2A skill). Leaf keys are declared so the
@@ -143,7 +153,22 @@ docgen:
 # Dynamic research cycle (run_research_cycle) — web-grounded, self-pruning loop.
 research:
   # UNAUTHENTICATED search-mcp-server /mcp endpoint for live search + crawl.
-  search_url: "https://searchmcp0.cloud-dog.net/mcp"
+  # Public default is a non-internal placeholder; the internal host is supplied at
+  # runtime via CLOUD_DOG__EXPERT__RESEARCH__SEARCH_URL (see docker-env.internal.example).
+  search_url: "https://<search-host>.example.com/mcp"
+  search_service_name: "search-mcp"
+  search_service_api_key_config_key: "dev.services.searchmcp.api_key"
+  search_stream_path: "/mcp/research/stream"
+  search_availability_gate_enabled: true
+  search_availability_persona: "uk-chrome"
+  stream_timeout_seconds: 300
+  stream_reconnect_attempts: 2
+  stream_reconnect_backoff_seconds: 0.25
+  allowed_group_ids: []
+  default_backends:
+    - "searxng"
+    - "news"
+    - "web"
   # file-mcp storage profile for the published daily brief (canonical: google_drive).
   storage_profile: "google_drive"
   # cap on the ranked source pool; on breach the lowest-ranked/oldest are retired
@@ -210,7 +235,7 @@ test:
 # Security settings
 auth:
   provider: "local"
-  jwt_secret: "<secret>"
+  jwt_secret: "dev-only-placeholder-jwt-secret"
   session_timeout_minutes: 60
   password_min_length: 8
   password_require_complexity: true
@@ -221,7 +246,7 @@ auth:
 
 # Security settings (audit signing)
 security:
-  audit_secret_key: "<secret>"
+  audit_secret_key: "dev-only-placeholder-audit-secret"
 
 # Redis defaults (queue/caching)
 redis:

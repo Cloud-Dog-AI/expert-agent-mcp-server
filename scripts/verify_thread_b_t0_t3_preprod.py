@@ -21,7 +21,7 @@ from typing import Any
 import requests
 
 
-BASE_URL = os.environ.get("EXPERTAGENT0_BASE_URL", "https://expert-agent.example.com").rstrip("/")
+BASE_URL = os.environ.get("EXPERTAGENT0_BASE_URL", "https://expertagent0.cloud-dog.net").rstrip("/")
 API_PREFIX = "/api/v1"
 TIMEOUT = float(os.environ.get("EXPERT_THREAD_B_TIMEOUT_SECONDS", "20"))
 

@@ -29,7 +29,7 @@ Recent Changes:
 """
 
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from sqlalchemy.orm import Session
 import unicodedata
 
@@ -39,6 +39,7 @@ from src.utils.logger import get_logger
 from src.config.loader import get_config
 
 logger = get_logger(__name__)
+ExpertToolEntry = Union[Dict[str, Any], str]
 
 
 def _is_cjk_char(ch: str) -> bool:
@@ -118,7 +119,7 @@ class ExpertManager:
         llm_model: Optional[str] = None,
         llm_params: Optional[Dict[str, Any]] = None,
         prompt_template: Optional[str] = None,
-        tools: Optional[List[str]] = None,
+        tools: Optional[List[ExpertToolEntry]] = None,
         enabled: bool = True,
         access_control: Optional[Dict[str, Any]] = None,
     ) -> ExpertConfigModel:

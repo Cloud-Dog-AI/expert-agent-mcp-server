@@ -68,10 +68,9 @@ logger = get_logger(__name__)
 # fallback never masks URL drift (WURL-001/002/004/009). Suffixes are relative to
 # ``web_server.base_path`` (default "") and joined with it at request time.
 #
-# Expert-agent divergence from the geospatial map (WURL-008): ``/docs``,
-# ``/openapi.json`` and ``/redoc`` are REAL FastAPI Swagger/OpenAPI endpoints on
-# this web tier (live 200) and MUST be retained, NOT redirected through a WebUI
-# alias. Only ``/api-docs`` is the WebUI Developer→API-Docs alias.
+# Expert-agent keeps ``/openapi.json`` and ``/redoc`` as real FastAPI schema/docs
+# endpoints. Historical WebUI docs aliases (``/api-docs``, ``/docs``, ``/openapi``)
+# redirect to the canonical Developer -> API Docs page.
 _LEGACY_WEBUI_REDIRECT_SUFFIXES: Dict[str, str] = {
     "/ui/login": "/login",
     "/auth/login": "/login",
@@ -88,11 +87,16 @@ _LEGACY_WEBUI_REDIRECT_SUFFIXES: Dict[str, str] = {
     "/idam/rbac": "/admin/rbac",
     "/rbac": "/admin/rbac",
     "/api-docs": "/developer/api-docs",
+    "/docs": "/developer/api-docs",
+    "/openapi": "/developer/api-docs",
     "/mcp-console": "/developer/mcp-console",
     "/a2a-console": "/developer/a2a-console",
     "/jobs": "/system/jobs",
     "/settings": "/system/settings",
     "/about": "/system/about",
+    # W28E-1852 PS-WEBUI-URL-CANONICAL §15 — /prompts is the canonical
+    # prompt/template family route; /admin/prompts 308-redirects to it.
+    "/admin/prompts": "/prompts",
 }
 
 # Canonical taxonomy routes that MUST serve the SPA shell (HTTP 200) after the
@@ -114,6 +118,8 @@ _CANONICAL_WEBUI_SUFFIXES: frozenset[str] = frozenset(
         "/system/jobs",
         "/system/settings",
         "/system/about",
+        # W28E-1852 — canonical prompt/template family route (WURL-PROMPTS).
+        "/prompts",
     }
 )
 
@@ -139,6 +145,7 @@ _KNOWN_SPA_ROUTE_PREFIXES: frozenset[str] = frozenset(
         "knowledge",
         "files",
         "testing",
+        "prompts",
         # legacy first-segments (308-redirected by middleware before reaching the
         # fallback; retained defensively so a client-side deep link still resolves)
         "idam",
@@ -150,6 +157,93 @@ _KNOWN_SPA_ROUTE_PREFIXES: frozenset[str] = frozenset(
         "about",
     }
 )
+
+# W28E-1863 fix-wave-d (CC-401 for expert-agent): reserved server-side path prefixes
+# / exact paths that MUST NOT be served the SPA shell. These proxy to the API / MCP /
+# A2A upstreams, are health/readiness probes, static assets, the OpenAPI/docs surface,
+# or auth/bootstrap endpoints. Everything ELSE that is a browser DOCUMENT navigation
+# (an extensionless GET/HEAD) resolves — as the fallback of LAST RESORT — to the SPA
+# index.html shell so React renders the requested route (or its own login gate for an
+# anonymous visitor) instead of a raw 404 JSON body.
+#
+# Root cause this fixes: the fix-wave-c bundle added `/providers` as a real React page
+# route, but it was never added to the `_KNOWN_SPA_ROUTE_PREFIXES` allowlist below, so a
+# hard-reload / deep-link / bookmark of `/providers` fell through to the WURL-007 404.
+# The blocklist is drift-safe: legacy aliases still 308 (the `canonical_webui_redirects`
+# middleware runs first), and every reserved server surface below still returns its real
+# status. Adapted from the deployed, smoke-green chat-client
+# ``ui_spa.is_spa_document_navigation`` BLOCKLIST (commit 2156ef9) and the file-mcp
+# fix-wave-b adoption (commit a282f7f); matches the sql-agent / search-mcp
+# true-catch-all pattern (AGENT-LESSONS §2.4). The check runs ONLY at the terminal
+# `/{path:path}` fallthrough — after every explicit API / MCP / A2A / health / auth /
+# asset route has had its chance to ``return`` — so it can never shadow them (this is the
+# file-mcp guard against the fix-wave-a Accept-header blank-render regression).
+_RESERVED_NON_SPA_PREFIXES: frozenset[str] = frozenset(
+    {
+        "api",
+        "v1",
+        "webapi",
+        "web",  # reserves /web/api/* (proxy) and /web/auth/* (cookie auth)
+        "mcp",
+        "a2a",
+        "messages",
+        "events",
+        "tasks",
+        "auth",
+        "assets",
+        "docs",
+        "redoc",
+        "openapi",
+    }
+)
+_RESERVED_NON_SPA_EXACT: frozenset[str] = frozenset(
+    {
+        "health",
+        "ready",
+        "live",
+        "healthz",
+        "status",
+        "version",
+        "runtime-config.js",
+        "openapi.json",
+        "favicon.ico",
+        "apple-touch-icon.png",
+        "apple-touch-icon-precomposed.png",
+    }
+)
+
+
+def is_spa_document_navigation(path: str) -> bool:
+    """Return True when a browser GET/HEAD for ``path`` should serve the SPA shell.
+
+    A path is a SPA document navigation when it is NOT one of the reserved
+    server-side surfaces (API / MCP / A2A proxy paths, health/readiness probes,
+    the OpenAPI/docs surface, auth/bootstrap endpoints, static assets) and does NOT
+    look like a static file request (no ``.`` in the final path segment — those are
+    asset/file GETs handled by the dedicated asset routes or a genuine 404). This is
+    the fallback of last resort that guarantees every React history route — including
+    ones not present in the enumerated ``_KNOWN_SPA_ROUTE_PREFIXES`` allowlist (e.g.
+    ``/providers``, ``/prompts/test-cases``, ``/research``) — resolves to
+    ``index.html`` on a hard navigation / refresh / bookmark, so the SPA renders
+    (unauthenticated -> its own login gate) rather than leaking a raw API 404 JSON body.
+    """
+    cleaned = str(path or "").strip().strip("/")
+    if not cleaned:
+        # Bare "/" is served by the explicit index handler; treat as non-doc here so
+        # this fallback never double-handles the root.
+        return False
+    first_segment = cleaned.split("/", 1)[0]
+    if first_segment in _RESERVED_NON_SPA_PREFIXES:
+        return False
+    if cleaned in _RESERVED_NON_SPA_EXACT or first_segment in _RESERVED_NON_SPA_EXACT:
+        return False
+    # A dot in the LAST segment indicates a static file request (e.g. foo.js,
+    # sitemap.xml) — never serve those the HTML shell; let the asset routes or a
+    # genuine 404 handle them (WURL-007: do not hide asset errors).
+    if "." in cleaned.rsplit("/", 1)[-1]:
+        return False
+    return True
+
 
 def _app_version() -> str:
     """EA-03: resolve version from build metadata (build-info.json) then config."""
@@ -195,6 +289,22 @@ def _mask_runtime_config(value: Any, parent_key: str = "") -> Any:
     if isinstance(value, list):
         return [_mask_runtime_config(item, parent_key) for item in value]
     return value
+
+
+def _translate_web_api_path(path: str) -> str:
+    """Translate shared WebUI API paths to expert-agent's root API routes."""
+    if path.startswith("v1/admin/"):
+        return "admin/" + path[len("v1/admin/"):]
+    if path == "v1/admin":
+        return "admin"
+    if path.startswith("v1/idam/"):
+        return "idam/" + path[len("v1/idam/"):]
+    # The shared IDAM pages load both their canonical admin collection and the
+    # compact collection.  WebApiProxy requests use absolute paths, so leaving
+    # the v1 prefix here targets /v1/groups rather than the API's /groups route.
+    if path == "v1/groups":
+        return "groups"
+    return path
 
 
 class WebLoginRequest(BaseModel):
@@ -357,9 +467,9 @@ class WebServer(BaseServer):
                         '<nav aria-label="Boot links" style="display:none">'
                         '<a href="/">Dashboard</a>'
                         '<a href="/chat">Chat</a>'
-                        '<a href="/api-docs">API Docs</a>'
-                        '<a href="/docs/api">API summary</a>'
-                        '<a href="/testing">Testing</a>'
+                        '<a href="/developer/api-docs">API Docs</a>'
+                        '<a href="/developer/mcp-console">MCP Console</a>'
+                        '<a href="/system/jobs">Jobs</a>'
                         "</nav></body>"
                     ),
                     1,
@@ -767,14 +877,7 @@ class WebServer(BaseServer):
             # W28A-876: the shared @cloud-dog/idam pages call /v1/admin/<entity>;
             # this expert api server publishes the IDAM admin surface under
             # /admin/<entity>. Strip the /v1 segment so the shared pages resolve.
-            if path.startswith("v1/admin/"):
-                path = "admin/" + path[len("v1/admin/"):]
-            elif path == "v1/admin":
-                path = "admin"
-            # W28A-876: shared RBAC page calls /v1/idam/v1/<x>; the api server mounts the
-            # canonical cloud_dog_idam idam_v1_router at /idam/v1/<x>. Strip the leading /v1.
-            elif path.startswith("v1/idam/"):
-                path = "idam/" + path[len("v1/idam/"):]
+            path = _translate_web_api_path(path)
             state = self._get_web_session_state(request)
             token = state.get("auth_token") if state else None
             if not token:
@@ -936,13 +1039,25 @@ class WebServer(BaseServer):
                     return FileResponse(candidate)
                 raise HTTPException(status_code=404, detail="Not Found")
 
-            # WURL-007: only serve the SPA shell for known top-level route segments;
-            # everything else is an explicit route-level 404 (no drift masking).
-            first_segment = path.split("/", 1)[0]
-            if first_segment not in _KNOWN_SPA_ROUTE_PREFIXES:
-                raise HTTPException(status_code=404, detail="Not Found")
+            # W28E-1863 fix-wave-d (CC-401): SPA deep-link fallback of LAST RESORT.
+            # A browser hard-navigation / refresh / bookmark of a React history route
+            # that is NOT in the enumerated allowlist (e.g. the fix-wave-c `/providers`
+            # page) previously fell through to the WURL-007 route-level 404 and returned
+            # a raw `{"detail":"Not Found"}` JSON body instead of the SPA shell. Serve
+            # index.html for any GET/HEAD document navigation to a non-reserved path so
+            # React renders the requested route — or, for an anonymous visitor, its own
+            # login gate. API / MCP / A2A / health / auth / asset paths remain reserved
+            # and are handled above / by their explicit routes (see
+            # is_spa_document_navigation). Drift-safe: legacy aliases are already 308ed by
+            # canonical_webui_redirects before reaching here, and dotted-file/asset paths
+            # are still 404ed above (WURL-007 "do not hide asset errors" is preserved).
+            # Replaces the fragile enumerated `_KNOWN_SPA_ROUTE_PREFIXES` allowlist as the
+            # fallback of last resort. Matches the deployed chat-client (2156ef9) and
+            # file-mcp (a282f7f) blocklist and AGENT-LESSONS §2.4.
+            if is_spa_document_navigation(path):
+                return self._spa_shell()
 
-            return self._spa_shell()
+            raise HTTPException(status_code=404, detail="Not Found")
         add_web_route("/{path:path}", spa_fallback, response_class=HTMLResponse)
 
     async def start(self):

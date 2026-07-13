@@ -3,553 +3,476 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 
-"""Dynamic research cycle — web-grounded, self-pruning knowledge loop.
-
-Precursor to W28M-1606 (ReAct/Codeflow/RM). ONE topic-scoped daily cycle the
-scheduler invokes as the MCP tool ``run_research_cycle``:
-
-    1. web research  : search-mcp-server ``search`` (live web) -> candidate sources
-    2. add to repo   : ``crawl`` NEW sources -> ``ingest_text`` into the topic's
-                       index collection (source_uri = canonical url)
-    3. rank + prune  : score every source (search relevance x recency); when the
-                       pool exceeds ``research.max_sources`` retire the lowest-
-                       ranked/oldest -> drop its register row AND ``delete_by_filter``
-                       its indexed content
-    4. grounded gen  : retrieve top-K from the (now fresh) collection and generate a
-                       daily brief grounded in CURRENT web facts (cited)
-    5. deliver       : write the brief to Drive, persist the register, git audit,
-                       and notify the topic's recipients
-
-Additive: composes ``ServiceCompositionManager.invoke_tool`` (registered Vault
-creds), ``TransactionalExecutor.execute`` (generation), and a direct httpx call to
-the UNAUTHENTICATED search-mcp-server ``/mcp`` (url from config). It does NOT modify
-``chat_tool``/``execute_tool``/``invoke_service_tool`` or the executor graph.
-"""
+"""search-mcp research_stream consumer and chat-facing relay helpers."""
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import time
-import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+import uuid
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterable, List, Optional
 
 import httpx
+from sqlalchemy.orm import Session
 
 from src.config.loader import get_config
+from src.core.audit.manager import AuditManager
+from src.core.expert.research_expert import ensure_research_expert, select_research_plan
+from src.core.service.composition import ServiceCompositionManager
+from src.database.connection import get_db
+from src.database.models import ExternalService
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# --- registered downstream services (resolved BY NAME at run time; ids are the
-#     preprod defaults but a fresh local container assigns different ids) --------
-INDEX_SVC = 9       # indexretriever0
-FILE_SVC = 10       # filemcpserver0
-NOTIFY_SVC = 11     # notificationagent0
-GIT_SVC = 12        # gitmcpserver0
-GENERATOR_EXPERT = 30  # DEMO-Document-Generator (qwen3:14b)
-
-_DELIVERED_STATES = {"sent", "delivered", "accepted"}
-_DEFAULT_SEARCH_URL = "https://searchmcp0.cloud-dog.net/mcp"
-_AUDIT_WORKSPACE = "demo-agentic-audit-c1d2704ef2e1"
-
-# Per-topic configuration for the four daily demo jobs. Recipients follow the
-# operator-confirmed policy: TB demos -> client (Colin) + internal; NATO/Ukraine
-# -> internal only. Slack destinations carry the channel NAME; the webhook
-# endpoint is resolved at delivery time (send_notification soft-fails on name only).
-TOPICS: Dict[str, Dict[str, Any]] = {
-    "ukraine": {
-        "label": "Ukraine Border Watch",
-        "queries": ["Ukraine border situation latest news", "Ukraine refugee crossing update"],
-        "collection": "demo-research-ukraine",
-        "profile": "default",
-        "register": "research-loop/ukraine/source-register.jsonl",
-        "drive_out": "/CloudDog-Demos/researcher-ukraine-war/research-loop",
-        "slack_channel": "slack_ukraine_news",
-        "email_channel": "email_default",
-        "email_group": "group:Ukraine Digest Admin Group",
-        "subject": "Ukraine Border Watch — Web-Grounded Daily Brief",
-    },
-    "transparent-borders": {
-        "label": "Transparent Borders Research",
-        "queries": ["transparent borders migration policy latest", "border crossing controls news"],
-        "collection": "demo-research-transparent-borders",
-        "profile": "default",
-        "register": "research-loop/transparent-borders/source-register.jsonl",
-        "drive_out": "/CloudDog-Demos/transparent-borders/research-loop",
-        "slack_channel": "slack_transparentborders",
-        "email_channel": "email_transparent_borders_research",
-        "email_group": "group:Transparent Borders Research Admin Group",
-        "subject": "Transparent Borders — Web-Grounded Daily Brief",
-    },
-    "nato-doctrine": {
-        "label": "NATO Doctrine Watch",
-        "queries": ["NATO allied joint doctrine update", "NATO military doctrine news"],
-        "collection": "demo-research-nato-doctrine",
-        "profile": "default",
-        "register": "research-loop/nato-doctrine/source-register.jsonl",
-        "drive_out": "/CloudDog-Demos/nato-doctrine/research-loop",
-        "slack_channel": "slack_cloud_dog_ai_notification",
-        "email_channel": "email_nato_doctrine_admin",
-        "email_group": "group:NATO Doctrine Admin Group",
-        "subject": "NATO Doctrine — Web-Grounded Daily Brief",
-    },
-    "transparent-borders-report": {
-        "label": "Transparent Borders Country Report",
-        "queries": ["country border management policy latest", "migration border statistics report"],
-        "collection": "demo-research-transparent-borders-report",
-        "profile": "default",
-        "register": "research-loop/transparent-borders-report/source-register.jsonl",
-        "drive_out": "/CloudDog-Demos/transparent-borders-report-generation/research-loop",
-        "slack_channel": "slack_transparentborders",
-        "email_channel": "email_transparent_borders_report_generation",
-        "email_group": "group:Transparent Borders Report Generation Admin Group",
-        "subject": "Transparent Borders — Web-Grounded Country Brief",
-    },
-}
+ResearchEventCallback = Callable[[Dict[str, Any]], Optional[Awaitable[None]]]
 
 
-def _canonical_url(u: str) -> str:
-    try:
-        p = urllib.parse.urlsplit((u or "").strip())
-        q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query)
-             if not k.lower().startswith(("utm_", "fbclid", "gclid"))]
-        path = p.path.rstrip("/") or "/"
-        return urllib.parse.urlunsplit((p.scheme.lower(), p.netloc.lower(), path,
-                                        urllib.parse.urlencode(q), ""))
-    except Exception:
-        return (u or "").strip()
+def _normalise_stream_url(service: ExternalService) -> str:
+    path = str(get_config("research.search_stream_path") or "/mcp/research/stream").strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    endpoint = str(service.endpoint_url).rstrip("/")
+    if endpoint.endswith("/mcp") and path.startswith("/mcp/"):
+        endpoint = endpoint[: -len("/mcp")]
+    return endpoint + path
 
 
-def _host(u: str) -> str:
-    try:
-        return urllib.parse.urlsplit(u).netloc.lower()
-    except Exception:
-        return ""
-
-
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H%M%SZ", time.gmtime())
-
-
-class ResearchCycleAgent:
-    """Web-grounded, self-pruning daily research loop (in-process)."""
-
-    INDEX_NAME = "indexretriever0"
-    FILE_NAME = "filemcpserver0"
-    NOTIFY_NAME = "notificationagent0"
-    GIT_NAME = "gitmcpserver0"
-    GENERATOR_NAME = "Document Generator"
-
-    def __init__(self, db: Any) -> None:
-        self.db = db
-        self._index_id = INDEX_SVC
-        self._file_id = FILE_SVC
-        self._notify_id = NOTIFY_SVC
-        self._git_id = GIT_SVC
-        self._gen_id = GENERATOR_EXPERT
-
-    # ---------------------------------------------------------- id resolution
-    def _service_id(self, name: str, default_id: int) -> int:
-        try:
-            from src.core.service.manager import ServiceManager
-            svc = ServiceManager(self.db).get_service(name=name)
-            if svc:
-                return int(svc.id)
-        except Exception as exc:
-            logger.warning("service resolve by name '%s' failed: %s", name, exc)
-        return default_id
-
-    def _expert_id(self, title: str, default_id: int) -> int:
-        try:
-            from src.core.expert.manager import ExpertManager
-            for e in ExpertManager(self.db).list_experts():
-                if (getattr(e, "title", None) or "").strip().lower() == title.strip().lower():
-                    return int(e.id)
-        except Exception as exc:
-            logger.warning("expert resolve by name '%s' failed: %s", title, exc)
-        return default_id
-
-    def _resolve_ids(self) -> None:
-        self._index_id = self._service_id(self.INDEX_NAME, INDEX_SVC)
-        self._file_id = self._service_id(self.FILE_NAME, FILE_SVC)
-        self._notify_id = self._service_id(self.NOTIFY_NAME, NOTIFY_SVC)
-        self._git_id = self._service_id(self.GIT_NAME, GIT_SVC)
-        self._gen_id = self._expert_id(self.GENERATOR_NAME, GENERATOR_EXPERT)
-
-    # ------------------------------------------------------- mcp envelope helpers
-    @staticmethod
-    def _unwrap(result: Dict[str, Any]) -> Dict[str, Any]:
-        if isinstance(result, dict) and isinstance(result.get("result"), dict) \
-                and ("content" in result["result"] or "structuredContent" in result["result"]
-                     or "isError" in result["result"]):
-            return result["result"]
-        return result or {}
-
-    @classmethod
-    def _mcp_text(cls, result: Dict[str, Any]) -> str:
-        inner = cls._unwrap(result)
-        content = inner.get("content") or []
-        if content and isinstance(content[0], dict):
-            return content[0].get("text", "") or ""
-        return ""
-
-    @classmethod
-    def _mcp_struct(cls, result: Dict[str, Any]) -> Dict[str, Any]:
-        inner = cls._unwrap(result)
-        struct = inner.get("structuredContent")
-        if struct:
-            return struct
-        txt = cls._mcp_text(result)
-        try:
-            return json.loads(txt) if txt else {}
-        except Exception:
-            return {}
-
-    @classmethod
-    def _mcp_is_error(cls, envelope: Dict[str, Any]) -> bool:
-        if isinstance(envelope, dict) and envelope.get("status") in ("failed", "error", "skipped"):
-            return True
-        return bool(cls._unwrap(envelope).get("isError"))
-
-    async def _svc(self, service_id: int, tool: str, args: Dict[str, Any],
-                   auth_context: Dict[str, Any]) -> Dict[str, Any]:
-        from src.core.service.composition import ServiceCompositionManager
-        mgr = ServiceCompositionManager(self.db)
-        return await mgr.invoke_tool(service_id=service_id, tool_name=tool,
-                                     arguments=args, auth_context=auth_context)
-
-    async def _execute(self, expert_id: int, input_text: str, auth_context: Dict[str, Any],
-                       max_tokens: int = 1500, temperature: float = 0.2) -> str:
-        from src.core.execution.transactional import TransactionalExecutor
-        executor = TransactionalExecutor(self.db)
-        result = await executor.execute(
-            expert_id=expert_id, input_text=input_text,
-            parameters={"max_tokens": max_tokens, "temperature": temperature},
-            auth_context=auth_context)
-        out = result.get("output_text", "") if isinstance(result, dict) else ""
-        try:
-            return json.loads(out).get("output_text", out)
-        except Exception:
-            return out
-
-    # ----------------------------------------------------------------- searx
-    async def _searx(self, tool: str, args: Dict[str, Any], timeout: float = 180.0) -> Dict[str, Any]:
-        """Call the UNAUTHENTICATED search-mcp-server /mcp (url from config)."""
-        url = get_config("research.search_url") or _DEFAULT_SEARCH_URL
-        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": tool, "arguments": args}}
-        from src.core.http import get_shared_async_client
-        client = get_shared_async_client(timeout=timeout)
-        resp = await client.post(url, json=body, timeout=timeout,
-                                 headers={"Accept": "application/json, text/event-stream",
-                                          "Content-Type": "application/json"})
-        txt = resp.text
-        for line in txt.splitlines():
-            line = line.strip()
-            if line.startswith("data:"):
-                line = line[5:].strip()
-            if line.startswith("{"):
-                try:
-                    o = json.loads(line)
-                    if "result" in o or "error" in o:
-                        res = o.get("result", {})
-                        return res.get("structuredContent") or res or o
-                except Exception:
-                    pass
-        try:
-            o = json.loads(txt)
-            return o.get("result", {}).get("structuredContent") or o.get("result", {}) or o
-        except Exception:
-            return {}
-
-    # --------------------------------------------------------- stage 1: research
-    async def _research(self, tc: Dict[str, Any]) -> List[Dict[str, Any]]:
-        seen, cands = set(), []
-        smax = int(get_config("research.search_max_results") or 6)
-        for q in tc["queries"]:
-            r = await self._searx("search", {"query": q, "language": "en", "max_results": smax})
-            for it in (r.get("results") or []):
-                cu = _canonical_url(it.get("url") or "")
-                if not cu or cu in seen:
-                    continue
-                seen.add(cu)
-                cands.append({"url": cu, "title": (it.get("title") or "")[:200], "host": _host(cu),
-                              "engine": it.get("engine"), "search_score": float(it.get("score") or 0.0),
-                              "published": it.get("publishedDate"), "query": q})
-        return cands
-
-    async def _crawl(self, url: str) -> str:
-        r = await self._searx("crawl", {"urls": url, "output_format": "markdown", "stealth": True})
-        docs = r.get("documents") or []
-        if docs and docs[0].get("status") == "success":
-            return docs[0].get("markdown") or ""
-        return ""
-
-    # ------------------------------------------------- register read / merge / write
-    async def _read_register(self, path: str, auth_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        res = await self._svc(self._file_id, "read_file", {"profile": "default", "path": path}, auth_context)
-        struct = self._mcp_struct(res)
-        txt = struct.get("value") if isinstance(struct, dict) and isinstance(struct.get("value"), str) \
-            else self._mcp_text(res)
-        rows = []
-        for ln in (txt or "").splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
+def _parse_mcp_payload(raw: Any) -> Any:
+    """Unwrap MCP JSON/content/SSE envelopes into the inner tool payload."""
+    value = raw
+    for _ in range(5):
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("data:"):
+                for line in text.splitlines():
+                    if line.strip().startswith("data:"):
+                        text = line.split(":", 1)[1].strip()
+                        break
             try:
-                rows.append(json.loads(ln))
-            except Exception:
-                pass
-        return rows
-
-    async def _write_register(self, path: str, rows: List[Dict[str, Any]],
-                              auth_context: Dict[str, Any]) -> None:
-        payload = "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows)
-        payload = payload + ("\n" if rows else "")
-        await self._svc(self._file_id, "write_file",
-                        {"profile": "default", "path": path, "content": payload, "overwrite": True},
-                        auth_context)
-
-    @staticmethod
-    def _merge(existing: List[Dict[str, Any]], cands: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        by_url = {r["url"]: r for r in existing if r.get("url")}
-        new = []
-        for c in cands:
-            if c["url"] in by_url:
-                by_url[c["url"]].update({"search_score": c.get("search_score"), "last_seen_at": _now()})
+                value = json.loads(text)
                 continue
-            c = dict(c); c["first_seen_at"] = _now(); c["last_seen_at"] = c["first_seen_at"]
-            by_url[c["url"]] = c; new.append(c)
-        return list(by_url.values()), new
+            except Exception:
+                return value
+        if not isinstance(value, dict):
+            return value
+        if "result" in value and isinstance(value["result"], (dict, list, str)):
+            value = value["result"]
+            continue
+        structured = value.get("structuredContent")
+        if isinstance(structured, (dict, list, str)):
+            value = structured
+            continue
+        blocks = value.get("content")
+        if isinstance(blocks, list):
+            next_value = None
+            for block in blocks:
+                if isinstance(block, dict) and "text" in block:
+                    next_value = block["text"]
+                    break
+            if next_value is not None:
+                value = next_value
+                continue
+        return value
+    return value
 
-    # ---------------------------------------------------------- stage 3: rank + prune
-    @staticmethod
-    def _recency(first_seen: Optional[str]) -> float:
-        if not first_seen:
-            return 0.5
+
+def _sse_event_from_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    data = fields.get("data")
+    payload: Dict[str, Any]
+    if isinstance(data, dict):
+        payload = dict(data)
+    elif isinstance(data, str) and data.strip():
         try:
-            t = time.mktime(time.strptime(first_seen[:15], "%Y-%m-%dT%H%M%S"))
-            half = float(get_config("research.recency_halflife_days") or 30.0)
-            age_days = max(0.0, (time.time() - t) / 86400.0)
-            return 0.5 ** (age_days / half)
-        except Exception:
-            return 0.5
+            parsed = json.loads(data)
+            payload = parsed if isinstance(parsed, dict) else {"data": parsed}
+        except json.JSONDecodeError:
+            payload = {"data": data}
+    else:
+        payload = {}
 
-    def _score(self, s: Dict[str, Any]) -> float:
-        rel = min(1.0, float(s.get("search_score") or 0.0) / 5.0)
-        rec = self._recency(s.get("first_seen_at"))
-        ing = 0.15 if s.get("ingested") else 0.0
-        return round(0.6 * rel + 0.25 * rec + ing, 6)
+    if fields.get("id") is not None and payload.get("id") is None:
+        payload["id"] = fields["id"]
+    if fields.get("event") and payload.get("type") is None:
+        payload["type"] = fields["event"]
+    return payload
 
-    async def _rank_and_prune(self, profile: str, collection: str, sources: List[Dict[str, Any]],
-                              auth_context: Dict[str, Any], do_delete: bool) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        max_sources = int(get_config("research.max_sources") or 50)
-        for s in sources:
-            s["score"] = self._score(s)
-        ranked = sorted(sources, key=lambda s: (s["score"], s.get("first_seen_at") or ""), reverse=True)
-        keep, retire = ranked[:max_sources], ranked[max_sources:]
-        for s in retire:
-            if do_delete:
-                try:
-                    await self._svc(self._index_id, "delete_by_filter",
-                                    {"profile": profile, "collection": collection,
-                                     "filters": {"source_uri": s["url"]}}, auth_context)
-                except Exception as exc:
-                    logger.warning("prune delete failed for %s: %s", s.get("url"), exc)
-            s["retired_at"] = _now()
-        for i, s in enumerate(keep):
-            s["rank"] = i + 1
-        return keep, retire
 
-    # ------------------------------------------------------- stage 4: grounded gen
-    async def _grounded_generate(self, profile: str, collection: str, label: str,
-                                 auth_context: Dict[str, Any]) -> Dict[str, Any]:
-        sr = await self._svc(self._index_id, "search",
-                             {"profile": profile, "collection": collection,
-                              "query": f"{label} latest developments", "top_k": 6}, auth_context)
-        hits = self._mcp_struct(sr).get("results") or []
-        facts = "\n\n".join(f"[S{i+1}] {h.get('source_uri')}\n{(h.get('text') or '')[:1200]}"
-                            for i, h in enumerate(hits))
-        prompt = (
-            f"You are the {label} researcher. Using ONLY the SOURCE FACTS below (freshly "
-            f"retrieved from the web today), write a concise daily brief in clean semantic HTML "
-            f"with an <h1> title and 2-3 <h2> sections. Cite sources inline as [S1],[S2]. "
-            f"Do not invent facts.\n\nSOURCE FACTS:\n{facts}\n")
-        doc = await self._execute(self._gen_id, prompt, auth_context, max_tokens=1500, temperature=0.2)
-        return {"retrieved": len(hits), "facts_chars": len(facts), "document": doc}
+def sse_frame(event: Dict[str, Any]) -> str:
+    """Serialise a normalized research event as one SSE frame."""
+    event_id = event.get("id") or event.get("sequence") or ""
+    event_name = event.get("type") or "message"
+    return (
+        f"id: {event_id}\n"
+        f"event: {event_name}\n"
+        f"data: {json.dumps(event, default=str)}\n\n"
+    )
 
-    # --------------------------------------------------------------- delivery
-    async def _slack_endpoint(self, channel_name: str, auth_context: Dict[str, Any]) -> str:
+
+async def _maybe_call(callback: Optional[ResearchEventCallback], event: Dict[str, Any]) -> None:
+    if callback is None:
+        return
+    result = callback(event)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _config_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    return default
+
+
+class ResearchCycleManager:
+    """Consumes search-mcp streaming research and enriches image inputs."""
+
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        composition: Optional[ServiceCompositionManager] = None,
+    ) -> None:
+        self.db = db
+        self.composition = composition or ServiceCompositionManager(db)
+
+    def _get_db(self) -> Session:
+        if self.db is not None:
+            return self.db
+        db_gen = get_db()
+        return next(db_gen)
+
+    def _emit_audit(
+        self,
+        event_type: str,
+        *,
+        action: str,
+        outcome: str,
+        correlation_id: Optional[str],
+        tenant_id: str,
+        target: Dict[str, Any],
+        user_id: Optional[Any] = None,
+        role: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
         try:
-            ch = await self._svc(self._notify_id, "list_channels", {}, auth_context)
-            items = self._mcp_struct(ch).get("channels") or self._mcp_struct(ch).get("items") or []
-            for c in items:
-                if c.get("name") == channel_name:
-                    return str((c.get("config") or {}).get("endpoint") or "")
-        except Exception as exc:
-            logger.warning("slack endpoint resolve failed: %s", exc)
-        return ""
+            payload: Dict[str, Any] = {
+                "action": action,
+                "outcome": outcome,
+                "subject": {
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "role": role or "system",
+                },
+                "target": target,
+                "source_ip": (details or {}).get("source_ip"),
+                "request_id": (details or {}).get("request_id"),
+                "correlation_id": correlation_id,
+            }
+            if details:
+                payload.update({k: v for k, v in details.items() if k not in payload})
+            AuditManager(self._get_db()).log_event(event_type, details=payload)
+        except Exception as exc:  # pragma: no cover - audit cannot break streams
+            logger.warning("research cycle audit failed: %s", exc)
 
-    async def _deliver(self, tc: Dict[str, Any], subject: str, html: str, idem: str,
-                       auth_context: Dict[str, Any], slack_endpoint: Optional[str] = None) -> Dict[str, Any]:
-        dests = [{"channel": tc["email_channel"], "address": tc["email_group"],
-                  "preferences": {"content_style": "html", "format_mode": "passthrough"}}]
-        # Operator-requested direct feed recipients (e.g. ukraine + nato-doctrine): delivered
-        # alongside the group as direct email destinations (no platform accounts created).
-        for addr in (tc.get("extra_recipients") or []):
-            dests.append({"channel": tc["email_channel"], "address": addr,
-                          "preferences": {"content_style": "html", "format_mode": "passthrough"}})
-        # Slack needs the webhook ENDPOINT address (a channel name soft-fails). The
-        # MCP list_channels surface is permission-scoped/empty for this caller, so the
-        # endpoint is supplied by the scheduler (resolved at schedule-creation time via
-        # the admin channels API), with a runtime resolve as a best-effort fallback.
-        endpoint = slack_endpoint or await self._slack_endpoint(tc["slack_channel"], auth_context)
-        if endpoint:
-            dests.insert(0, {"channel": tc["slack_channel"], "address": endpoint,
-                             "preferences": {"content_style": "html"}})
-        send = await self._svc(self._notify_id, "send_notification", {
-            "destinations": dests, "subject": subject,
-            "content": [{"type": "html", "body": html}], "idempotency_key": idem}, auth_context)
-        struct = self._mcp_struct(send)
-        mid = struct.get("message_id")
-        if not mid:
-            return {"ok": False, "message_id": None, "states": [], "raw": str(send)[:300]}
-        states: List[Dict[str, Any]] = []
-        for _ in range(18):
-            time.sleep(5)
-            dl = await self._svc(self._notify_id, "list_deliveries", {"message_id": mid}, auth_context)
-            items = self._mcp_struct(dl).get("items") or self._mcp_struct(dl).get("deliveries") or []
-            states = [{"channel": it.get("channel_name") or it.get("channel"),
-                       "to": it.get("destination"), "state": it.get("state") or it.get("status")}
-                      for it in items]
-            if states and all((s["state"] in _DELIVERED_STATES or "fail" in str(s["state"]).lower())
-                              for s in states):
-                break
-        any_ok = any(s["state"] in _DELIVERED_STATES for s in states)
-        return {"ok": bool(any_ok), "message_id": mid, "states": states,
-                "destinations": [d["channel"] for d in dests]}
+    async def _iter_sse_response(
+        self,
+        response: httpx.Response,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        fields: Dict[str, Any] = {}
+        async for raw_line in response.aiter_lines():
+            line = raw_line.rstrip("\r")
+            if line == "":
+                if fields:
+                    yield _sse_event_from_fields(fields)
+                    fields = {}
+                continue
+            if line.startswith(":") or ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            fields[name.strip()] = value.strip()
+        if fields:
+            yield _sse_event_from_fields(fields)
 
-    async def _git_audit(self, tc: Dict[str, Any], topic: str, run_ts: str, summary: Dict[str, Any],
-                         auth_context: Dict[str, Any]) -> Dict[str, Any]:
-        path = f"docs/audit/research-loop/{topic}/{run_ts}.md"
-        body = (f"# Research-loop audit — {topic} — {run_ts}\n\n"
-                f"candidates={summary.get('candidates')} new={summary.get('new_sources')} "
-                f"ingested={summary.get('ingested')} kept={summary.get('kept')} "
-                f"retired={summary.get('retired')} retrieved={summary.get('retrieved')}\n")
-        try:
-            await self._svc(self._git_id, "file_write",
-                            {"workspace_id": _AUDIT_WORKSPACE, "path": path, "content": body}, auth_context)
-            await self._svc(self._git_id, "git_add",
-                            {"workspace_id": _AUDIT_WORKSPACE, "paths": [path]}, auth_context)
-            await self._svc(self._git_id, "git_commit",
-                            {"workspace_id": _AUDIT_WORKSPACE,
-                             "message": f"research-loop {topic} {run_ts}",
-                             "author_name": "research-loop", "author_email": "research-loop@cloud-dog.net",
-                             "committer_name": "research-loop", "committer_email": "research-loop@cloud-dog.net"},
-                            auth_context)
-            return {"ok": True, "path": path}
-        except Exception as exc:
-            logger.warning("git audit failed: %s", exc)
-            return {"ok": False, "error": str(exc)[:200]}
+    async def stream_research(
+        self,
+        query: str,
+        *,
+        depth: Optional[str] = None,
+        tenant_id: str = "default",
+        correlation_id: Optional[str] = None,
+        max_results: Optional[int] = None,
+        query_languages: Optional[Iterable[str]] = None,
+        target_languages: Optional[Iterable[str]] = None,
+        synthesise_in: Optional[str] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+        on_event: Optional[ResearchEventCallback] = None,
+        last_event_id: Optional[int] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Consume search-mcp SSE and yield normalized per-event dicts."""
+        if not str(query or "").strip():
+            raise ValueError("query is required")
+        correlation_id = correlation_id or str(uuid.uuid4())
+        plan = select_research_plan(
+            query,
+            budget={"max_results": max_results} if max_results is not None else None,
+            requested_depth=depth,
+        )
+        service = self.composition.ensure_search_mcp_service()
+        url = _normalise_stream_url(service)
+        timeout = float(get_config("research.stream_timeout_seconds") or 300)
+        max_reconnects = int(get_config("research.stream_reconnect_attempts") or 2)
+        backoff = float(get_config("research.stream_reconnect_backoff_seconds") or 0.25)
+        headers = self.composition._auth_headers(  # Existing service auth path.
+            service,
+            auth_context={"correlation_id": correlation_id},
+        )
+        headers["Accept"] = "text/event-stream"
+        params: Dict[str, Any] = {
+            "query": query,
+            "depth": plan.depth,
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "max_results": plan.max_results,
+        }
+        if query_languages:
+            params["query_languages"] = ",".join(str(v) for v in query_languages)
+        if target_languages:
+            params["target_languages"] = ",".join(str(v) for v in target_languages)
+        if synthesise_in:
+            params["synthesise_in"] = str(synthesise_in)
 
-    # ------------------------------------------------------------------- run
-    async def run(self, topic: str, *, deliver: bool = True, dry_run: bool = False,
-                  actor: str = "research-loop", slack_endpoint: Optional[str] = None) -> Dict[str, Any]:
-        if topic not in TOPICS:
-            return {"action_taken": False, "status": "failed",
-                    "error": f"unknown topic '{topic}'; known: {list(TOPICS)}"}
-        self._resolve_ids()
-        tc = TOPICS[topic]
-        run_ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        profile = tc["profile"]
-        collection = tc["collection"] + ("-test" if dry_run else "")
-        register = ("research-loop-test/" if dry_run else "") + tc["register"]
-        auth_context = {"actor": actor, "role": "system",
-                        "correlation_id": f"research-loop-{topic}-{run_ts}"}
-        summary: Dict[str, Any] = {"action_taken": True, "status": "ok", "topic": topic,
-                                   "run_ts": run_ts, "dry_run": dry_run, "collection": collection}
+        user_id = (auth_context or {}).get("user_id")
+        role = (auth_context or {}).get("role")
+        if _config_bool(get_config("research.search_availability_gate_enabled"), True):
+            persona_id = str(
+                get_config("research.search_availability_persona") or "uk-chrome"
+            ).strip() or "uk-chrome"
+            availability = await self.composition.search_availability(
+                service,
+                persona_id=persona_id,
+                auth_context={"correlation_id": correlation_id},
+            )
+            if str(availability.get("status") or "").lower() == "unavailable":
+                self._emit_audit(
+                    "a2a.call",
+                    action="research_stream.availability_gate",
+                    outcome="denied",
+                    correlation_id=correlation_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    role=role,
+                    target={
+                        "type": "external_service",
+                        "id": str(service.id),
+                        "name": service.name,
+                    },
+                    details={
+                        "availability": availability,
+                        "persona_id": persona_id,
+                        "fallback_reason": availability.get("action"),
+                    },
+                )
+                action = availability.get("action") or availability.get("status")
+                raise RuntimeError(f"SearchMCP unavailable: {action}")
 
-        # ensure collection exists
-        await self._svc(self._index_id, "admin_collection_create",
-                        {"profile": profile, "collection": collection}, auth_context)
+        current_last_id = last_event_id
+        terminal_seen = False
+        for attempt in range(max_reconnects + 1):
+            request_params = dict(params)
+            request_headers = dict(headers)
+            if current_last_id is not None:
+                request_params["last_event_id"] = int(current_last_id)
+                request_headers["Last-Event-ID"] = str(current_last_id)
 
-        # 1. research
-        cands = await self._research(tc)
-        summary["candidates"] = len(cands)
+            started = time.perf_counter()
+            try:
+                self._emit_audit(
+                    "a2a.call",
+                    action="research_stream",
+                    outcome="success",
+                    correlation_id=correlation_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    role=role,
+                    target={
+                        "type": "external_service",
+                        "id": str(service.id),
+                        "name": service.name,
+                    },
+                    details={"url": url, "depth": plan.depth, "attempt": attempt},
+                )
+                async with self.composition.client.stream(
+                    "GET",
+                    url,
+                    headers=request_headers,
+                    params=request_params,
+                    timeout=timeout,
+                ) as response:
+                    response.raise_for_status()
+                    async for event in self._iter_sse_response(response):
+                        event.setdefault("correlation_id", correlation_id)
+                        event.setdefault("tenant_id", tenant_id)
+                        if event.get("id") is not None:
+                            try:
+                                current_last_id = int(event["id"])
+                            except (TypeError, ValueError):
+                                pass
+                        self._emit_audit(
+                            "mcp.call",
+                            action="chat_stream_relay",
+                            outcome="success",
+                            correlation_id=correlation_id,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            role=role,
+                            target={
+                                "type": "mcp_stream",
+                                "id": str(event.get("id") or event.get("sequence") or ""),
+                                "name": str(event.get("type") or "research_stream"),
+                            },
+                            details={
+                                "duration_ms": int((time.perf_counter() - started) * 1000),
+                                "sequence": event.get("sequence"),
+                                "stream_event_type": event.get("type"),
+                            },
+                        )
+                        await _maybe_call(on_event, event)
+                        yield event
+                        if event.get("type") == "final_synthesis":
+                            terminal_seen = True
+                            return
+                if terminal_seen:
+                    return
+                return
+            except (httpx.HTTPError, httpx.TimeoutException) as exc:
+                self._emit_audit(
+                    "a2a.call",
+                    action="research_stream",
+                    outcome="failure",
+                    correlation_id=correlation_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    role=role,
+                    target={
+                        "type": "external_service",
+                        "id": str(service.id),
+                        "name": service.name,
+                    },
+                    details={"error": str(exc), "attempt": attempt},
+                )
+                if attempt >= max_reconnects:
+                    raise
+                await asyncio.sleep(backoff * (attempt + 1))
 
-        # register merge
-        existing = await self._read_register(register, auth_context)
-        combined, new_rows = self._merge(existing, cands)
-        summary["existing_sources"] = len(existing)
-        summary["new_sources"] = len(new_rows)
+    async def enrich_image_inputs(
+        self,
+        image_refs: Iterable[str],
+        *,
+        tenant_id: str = "default",
+        correlation_id: Optional[str] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+        extract_charts: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Call search-mcp caption/chart tools for image URLs or file-mcp refs."""
+        refs = [str(ref).strip() for ref in image_refs if str(ref).strip()]
+        if not refs:
+            return []
+        service = self.composition.ensure_search_mcp_service()
+        enriched: List[Dict[str, Any]] = []
+        for ref in refs:
+            base_args = {
+                "image_url": ref,
+                "tenant_id": tenant_id,
+                "correlation_id": correlation_id,
+            }
+            caption_result = await self.composition.invoke_tool(
+                service.id,
+                "caption_image",
+                base_args,
+                auth_context=auth_context or {"correlation_id": correlation_id},
+            )
+            caption_payload = _parse_mcp_payload(caption_result.get("result", caption_result))
+            item: Dict[str, Any] = {"image_ref": ref, "caption": caption_payload}
+            if extract_charts:
+                chart_result = await self.composition.invoke_tool(
+                    service.id,
+                    "extract_chart",
+                    base_args,
+                    auth_context=auth_context or {"correlation_id": correlation_id},
+                )
+                item["chart"] = _parse_mcp_payload(chart_result.get("result", chart_result))
+            enriched.append(item)
+        return enriched
 
-        # 2. crawl + ingest the NEW ones (bounded per run)
-        per_run = int(get_config("research.crawl_new_per_run") or 4)
-        ingested = 0
-        for s in new_rows[:per_run]:
-            md = await self._crawl(s["url"])
-            if md and len(md) >= 200:
-                res = await self._svc(self._index_id, "ingest_text",
-                                      {"profile": profile, "collection": collection,
-                                       "text": md, "source": s["url"]}, auth_context)
-                if self._mcp_struct(res).get("job_id"):
-                    s["ingested"] = True
-                    s["crawl_chars"] = len(md)
-                    ingested += 1
-        summary["ingested"] = ingested
-        if ingested:
-            time.sleep(6)  # let async embedding settle
+    async def run_research_cycle(
+        self,
+        query: str,
+        *,
+        depth: Optional[str] = None,
+        tenant_id: str = "default",
+        correlation_id: Optional[str] = None,
+        budget: Optional[Dict[str, Any]] = None,
+        image_refs: Optional[Iterable[str]] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+        on_event: Optional[ResearchEventCallback] = None,
+    ) -> Dict[str, Any]:
+        """End-to-end helper used by MCP/A2A tools and tests."""
+        correlation_id = correlation_id or str(uuid.uuid4())
+        refs = list(image_refs or [])
+        ensure_research_expert(self._get_db())
+        image_context = await self.enrich_image_inputs(
+            refs,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            auth_context=auth_context,
+        )
+        plan = select_research_plan(
+            query,
+            budget=budget,
+            image_refs=refs,
+            requested_depth=depth,
+        )
+        effective_query = str(query or "").strip()
+        if image_context:
+            effective_query += "\n\nImage context:\n" + "\n".join(
+                f"- {item['image_ref']}: {json.dumps(item.get('caption'), default=str)}"
+                for item in image_context
+            )
+        events: List[Dict[str, Any]] = []
+        async for event in self.stream_research(
+            effective_query,
+            depth=plan.depth,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            max_results=plan.max_results,
+            auth_context=auth_context,
+            on_event=on_event,
+        ):
+            events.append(event)
+        return {
+            "status": "ok",
+            "query": query,
+            "effective_query": effective_query,
+            "correlation_id": correlation_id,
+            "plan": {
+                "depth": plan.depth,
+                "max_results": plan.max_results,
+                "backends": plan.backends,
+                "depth_prompt": plan.depth_prompt,
+                "backend_prompt": plan.backend_prompt,
+            },
+            "image_context": image_context,
+            "events": events,
+            "final_event": events[-1] if events else None,
+        }
 
-        # 3. rank + prune at threshold
-        keep, retire = await self._rank_and_prune(profile, collection, combined, auth_context, do_delete=True)
-        summary["kept"] = len(keep)
-        summary["retired"] = len(retire)
-        summary["retired_hosts"] = [s.get("host") for s in retire][:10]
-        summary["top_sources"] = [{"rank": s.get("rank"), "score": s.get("score"), "host": s.get("host")}
-                                  for s in keep[:5]]
-        await self._write_register(register, keep, auth_context)
-        summary["register"] = register
 
-        # 4. grounded generation
-        gen = await self._grounded_generate(profile, collection, tc["label"], auth_context)
-        summary["retrieved"] = gen["retrieved"]
-        summary["doc_chars"] = len(gen["document"])
-        html = gen["document"]
-        if not html.strip():
-            summary["status"] = "partial"
-            summary["failing_step"] = "generation"
-            return summary
-
-        # 5. deliver (Drive write + notify + git audit)  — skipped in dry_run
-        if deliver and not dry_run:
-            drive_path = f"{tc['drive_out'].rstrip('/')}/{run_ts}-{topic}-brief.html"
-            wr = await self._svc(self._file_id, "write_file",
-                                 {"profile": get_config("research.storage_profile") or "google_drive",
-                                  "path": drive_path, "content": html, "overwrite": True}, auth_context)
-            summary["drive_written"] = (not self._mcp_is_error(wr))
-            summary["drive_path"] = drive_path
-            deliv = await self._deliver(tc, tc["subject"] + f" — {run_ts}",
-                                        f"<p>Cloud-Dog AI · web-grounded · {run_ts}</p>\n" + html,
-                                        f"research-loop-{topic}-{run_ts}", auth_context,
-                                        slack_endpoint=slack_endpoint)
-            summary["delivery"] = deliv
-            summary["git_audit"] = await self._git_audit(tc, topic, run_ts, summary, auth_context)
-            if not deliv.get("ok"):
-                summary["status"] = "partial"
-                summary["failing_step"] = "delivery"
-        else:
-            summary["delivery"] = {"skipped": True, "reason": "dry_run" if dry_run else "deliver=False"}
-        summary["doc_head"] = html[:240]
-        return summary
-
-
-async def run_research_cycle(topic: str, *, db: Any = None, deliver: bool = True,
-                             dry_run: bool = False, actor: str = "research-loop",
-                             slack_endpoint: Optional[str] = None) -> Dict[str, Any]:
-    """Module entry — invoked by the ``run_research_cycle`` MCP tool / scheduler."""
-    if db is None:
-        from src.database.connection import get_db
-        db = next(get_db())
-    agent = ResearchCycleAgent(db)
-    return await agent.run(topic, deliver=deliver, dry_run=dry_run, actor=actor,
-                           slack_endpoint=slack_endpoint)
+__all__ = ["ResearchCycleManager", "ResearchEventCallback", "sse_frame"]

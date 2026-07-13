@@ -24,7 +24,7 @@ def generate_openapi():
     openapi_schema = server.app.openapi()
 
     # Write to file
-    output_path = project_root / "openapi.json"
+    output_path = project_root / "docs" / "openapi.json"
     with open(output_path, "w") as f:
         json.dump(openapi_schema, f, indent=2)
 

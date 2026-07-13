@@ -286,10 +286,36 @@ def _aspect_height(bbox: List[float], width: int) -> int:
 # --------------------------------------------------------------------------- #
 # Service-response envelope parsing (geo + chart)
 # --------------------------------------------------------------------------- #
-def _geo_image_b64(raw: Any) -> Optional[str]:
-    """Pull ``data.image_base64`` from a geo_render_map result, tolerating the MCP
-    content envelope (``result.content[0].text`` is a JSON string ``{ok,data:{...}}``),
-    a ``structuredContent`` dict, or an already-parsed dict."""
+def _geo_asset_reference(raw: Any) -> Optional[Dict[str, Any]]:
+    """Pull URL/storage reference metadata from a geo_render_map result.
+
+    The geospatial service may return the reference at the top level, under
+    ``data``, under ``asset``, or inside the MCP content/structuredContent
+    envelopes. This intentionally ignores base64 fields for the reference path.
+    """
+
+    def _from_dict(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        asset = obj.get("asset") if isinstance(obj.get("asset"), dict) else {}
+        url = (
+            obj.get("url")
+            or obj.get("asset_url")
+            or asset.get("url")
+            or asset.get("asset_url")
+        )
+        storage_path = obj.get("storage_path") or asset.get("storage_path")
+        if not url and not storage_path:
+            return None
+        ref: Dict[str, Any] = {}
+        if url:
+            ref["url"] = str(url)
+        if storage_path:
+            ref["storage_path"] = str(storage_path)
+        for key in ("asset_id", "content_type", "size_bytes", "expires_at", "storage_backend"):
+            value = obj.get(key) if obj.get(key) is not None else asset.get(key)
+            if value is not None:
+                ref[key] = value
+        return ref
+
     val: Any = raw
     for _ in range(4):
         if isinstance(val, str):
@@ -301,10 +327,13 @@ def _geo_image_b64(raw: Any) -> Optional[str]:
         if not isinstance(val, dict):
             return None
         data = val.get("data")
-        if isinstance(data, dict) and data.get("image_base64"):
-            return str(data["image_base64"])
-        if val.get("image_base64"):
-            return str(val["image_base64"])
+        if isinstance(data, dict):
+            ref = _from_dict(data)
+            if ref:
+                return ref
+        ref = _from_dict(val)
+        if ref:
+            return ref
         nxt = None
         if isinstance(val.get("structuredContent"), dict):
             nxt = val["structuredContent"]
@@ -322,6 +351,52 @@ def _geo_image_b64(raw: Any) -> Optional[str]:
             return None
         val = nxt
     return None
+
+
+def _geo_png_b64(raw: Any) -> Optional[str]:
+    """Pull an inline base64 PNG from a ``geo_render_map`` ``base64``-mode result.
+
+    ``geo_render_map`` writes the rendered PNG to the geospatial container's local disk
+    and, with ``transfer_mode="base64"``, also returns the bytes in ``data.image_base64``.
+    We embed those bytes as an inline CID attachment rather than the ``storage_path`` /
+    ``file://`` reference, which points at a path only the geo container can read and
+    which the notification/delivery container cannot (W28M-1633 root cause: reports
+    hard_failed on ``/app/working/renders/geo/*.png``). Tolerates the MCP
+    content/structuredContent envelopes; returns the first value that decodes to a PNG.
+    """
+    keys = ("image_base64", "base64", "base64_data", "png_base64", "data_base64")
+
+    def _scan(obj: Any, depth: int = 0) -> Optional[str]:
+        if depth > 8:
+            return None
+        if isinstance(obj, str):
+            # MCP content envelopes carry the payload as a JSON string (content[].text);
+            # descend into it. A base64 PNG value never starts with { or [, so this does
+            # not misparse the image data itself.
+            s = obj.strip()
+            if s[:1] in "{[":
+                try:
+                    return _scan(json.loads(s), depth + 1)
+                except Exception:
+                    return None
+            return None
+        if isinstance(obj, dict):
+            for k in keys:
+                v = obj.get(k)
+                if isinstance(v, str) and len(v) > 32 and _is_png_b64(v):
+                    return v
+            for v in obj.values():
+                got = _scan(v, depth + 1)
+                if got:
+                    return got
+        elif isinstance(obj, list):
+            for v in obj:
+                got = _scan(v, depth + 1)
+                if got:
+                    return got
+        return None
+
+    return _scan(raw)
 
 
 def _chart_asset_id(raw: Any) -> Optional[str]:
@@ -395,8 +470,8 @@ async def _render_one_map(
     geo_service: str,
     width: int = 1200,
     background: Tuple[int, int, int] = (208, 226, 240),
-) -> Optional[str]:
-    """Render one map from a spec entry; return its base64 PNG or None on any failure."""
+) -> Optional[Dict[str, Any]]:
+    """Render one map from a spec entry; return its URL/storage reference."""
     bbox = spec.get("bbox")
     if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
         logger.warning("visuals: map %r has no valid bbox; skipping", spec.get("id"))
@@ -442,6 +517,10 @@ async def _render_one_map(
     if legend_items:
         layers.append(_legend_layer(legend_items, height))
 
+    # Request the PNG bytes inline ("base64") so the map can be embedded as a self-contained
+    # CID attachment. Emitting the geo storage_path / file:// reference instead is the
+    # W28M-1633 root cause: that path lives on the geospatial container's disk and the
+    # notification/delivery container cannot read it, so every recipient hard_failed.
     args = {"width": width, "height": height, "bbox": bbox, "crs": "EPSG:4326",
             "background": list(background), "transfer_mode": "base64", "layers": layers}
     try:
@@ -449,11 +528,23 @@ async def _render_one_map(
     except Exception as exc:
         logger.warning("visuals: geo_render_map failed for %r: %s", spec.get("id"), exc)
         return None
-    b64 = _geo_image_b64(raw)
-    if not b64 or not _is_png_b64(b64):
-        logger.warning("visuals: map %r returned no usable PNG", spec.get("id"))
-        return None
-    return b64
+    b64 = _geo_png_b64(raw)
+    if b64:
+        ref: Dict[str, Any] = {"data": b64, "content_type": "image/png"}
+        asset_ref = _geo_asset_reference(raw) or {}
+        if asset_ref.get("asset_id"):
+            ref["asset_id"] = asset_ref["asset_id"]
+        return ref
+    # Fallback: only a genuinely fetchable HTTP(S) url is deliverable. A file:// url or a
+    # storage_path-only reference is undeliverable across containers, so skip the map
+    # (the report still sends without it) rather than hard-fail the whole message.
+    reference = _geo_asset_reference(raw) or {}
+    url = str(reference.get("url") or "")
+    if url.startswith("http://") or url.startswith("https://"):
+        return reference
+    logger.warning("visuals: map %r returned no inline PNG bytes or fetchable url; skipping "
+                   "(avoids the undeliverable cross-container storage_path)", spec.get("id"))
+    return None
 
 
 def _series_from_spec(spec: Dict[str, Any]) -> Tuple[List[str], "Dict[str, List[float]]"]:
@@ -603,8 +694,11 @@ def _render_chart_local(spec: Dict[str, Any]) -> Optional[str]:
         elif ct in ("bar", "line", "area"):
             cats, series = _series_from_spec(spec)
             name, vals = next(iter(series.items()))
-            cats = [_ascii(c) for c in cats]
-            fig, ax = _plt.subplots(figsize=(7.2, 4.2))
+            # ASCII-fold + truncate long category labels so rotated x-tick text does not
+            # collide/overlap into an unreadable smear ("corrupted text overlays").
+            cats = [(lambda s: (s[:16] + "…") if len(s) > 17 else s)(_ascii(c)) for c in cats]
+            # Widen the figure as categories grow so bars + labels have room.
+            fig, ax = _plt.subplots(figsize=(max(7.2, 0.95 * len(cats) + 2.0), 4.4))
             if ct == "bar":
                 bars = ax.bar(cats, vals, color=pal[0], edgecolor="white", linewidth=0.6)
                 for r in bars:
@@ -620,11 +714,52 @@ def _render_chart_local(spec: Dict[str, Any]) -> Optional[str]:
             ax.set_ylabel(ylabel or _ascii(name))
             ax.set_xlabel(xlabel)
             ax.set_title(title)
-            ax.tick_params(axis="x", rotation=20)
+            # Right-anchored 35° ticks read cleanly for country/entity labels without overlap.
+            for _lbl in ax.get_xticklabels():
+                _lbl.set_rotation(35); _lbl.set_ha("right"); _lbl.set_rotation_mode("anchor")
             ax.grid(axis="y", alpha=0.3)
             ax.set_axisbelow(True)
             for s in ("top", "right"):
                 ax.spines[s].set_visible(False)
+
+        elif ct in ("radar", "spider", "polar"):
+            # A grid of per-entity polar "criteria profile" radars (the placement
+            # city/country profiles). categories = the axis labels; series = one
+            # entry per entity with a value on each axis. Each axis is normalised to
+            # 0..1 across the entities so the shapes are directly comparable.
+            import math as _m
+            cats, series = _series_from_spec(spec)
+            axes_labels = [_ascii(c) for c in cats]
+            n_axes = len(axes_labels)
+            ents = [(nm, v) for nm, v in series.items() if len(v) >= n_axes]
+            if n_axes < 3 or not ents:
+                return None
+            angles = [i / float(n_axes) * 2 * _m.pi for i in range(n_axes)]
+            angles += angles[:1]
+            maxes = [max([abs(float(v[i])) for _n, v in ents] + [1e-9]) for i in range(n_axes)]
+            ncol = min(4, len(ents))
+            nrow = (len(ents) + ncol - 1) // ncol
+            fig, axs = _plt.subplots(nrow, ncol, figsize=(3.15 * ncol, 3.25 * nrow),
+                                     subplot_kw=dict(polar=True))
+            axs = list(axs.flatten()) if hasattr(axs, "flatten") else [axs]
+            for idx, (nm, vals) in enumerate(ents):
+                ax = axs[idx]
+                vv = [float(vals[i]) / maxes[i] for i in range(n_axes)]
+                vv += vv[:1]
+                col = pal[idx % len(pal)]
+                ax.plot(angles, vv, color=col, lw=1.8)
+                ax.fill(angles, vv, color=col, alpha=0.30)
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(axes_labels, fontsize=7)
+                ax.set_yticks([0.25, 0.5, 0.75])
+                ax.set_yticklabels([])
+                ax.set_ylim(0, 1)
+                ax.set_title(_ascii(nm), fontsize=10, weight="bold", pad=12, color="#20344d")
+            for j in range(len(ents), len(axs)):
+                axs[j].axis("off")
+            if title:
+                fig.suptitle(title, fontsize=14, weight="bold")
+            fig.tight_layout()
         else:
             return None
 
@@ -746,6 +881,19 @@ def _chart_spec_from_sql_rows(spec: Dict[str, Any], rows: List[List[Any]]) -> Op
                         for i in range(len(r0))]
         base["x"], base["y"] = "dim", "val"
         return base
+    if ct in ("radar", "spider", "polar"):
+        # each row = one entity (col 0 = its name) profiled over the numeric columns
+        # 1..n, which are the radar axes (labelled by ``series_names``/``dims``).
+        axes = spec.get("series_names") or spec.get("dims") or []
+        ncols = max((len(r) for r in rows), default=0)
+        if not axes:
+            axes = ["col%d" % i for i in range(1, ncols)]
+        naxes = min(len(axes), max(ncols - 1, 0))
+        base["chart_type"] = "radar"
+        base["categories"] = [str(a) for a in axes[:naxes]]
+        base["series"] = {str(r[0]): [_num(r[i]) if i < len(r) else 0.0 for i in range(1, naxes + 1)]
+                          for r in rows}
+        return base
     # default x/y mapping (label = col 0, value = col 1)
     base["rows"] = [{"label": str(r[0]), "value": _num(r[1]) if len(r) > 1 else 0.0} for r in rows]
     base["x"], base["y"] = "label", "value"
@@ -778,6 +926,59 @@ async def _render_chart_from_sql(
     cspec = _chart_spec_from_sql_rows(spec, rows)
     if not cspec:
         return None
+    return _render_chart_local(cspec)
+
+
+async def _render_radar_from_multi_sql(
+    spec: Dict[str, Any],
+    dispatch_service: Callable[..., Awaitable[Any]],
+    sql_service: str,
+) -> Optional[str]:
+    """Radar/criteria-profile chart whose axes each come from a SEPARATE 2-column
+    ``{entity, value}`` SQL query (the NL->SQL agent is reliable for 2-column results
+    but not wide multi-column ones). ``spec.axes`` is ``[{label, sql}, ...]``; we run
+    each query concurrently, align by entity name, keep only entities present on every
+    axis, and render one polar radar per entity."""
+    axes = [a for a in (spec.get("axes") or []) if isinstance(a, dict) and a.get("sql")]
+    if len(axes) < 3:
+        return None
+    import asyncio as _asyncio
+
+    async def _one_axis(ax: Dict[str, Any]) -> Dict[str, float]:
+        args: Dict[str, Any] = {"question": str(ax.get("sql")),
+                                "agent_strategy": str(spec.get("sql_strategy") or "simple")}
+        if spec.get("sql_profile"):
+            args["profile"] = str(spec["sql_profile"])
+        try:
+            raw = await dispatch_service(sql_service, "query_database_async_blocking", args)
+        except Exception as exc:
+            logger.warning("visuals: radar axis %r query failed: %s", ax.get("label"), exc)
+            return {}
+        out: Dict[str, float] = {}
+        for r in _sql_rows(raw):
+            if len(r) >= 2 and r[0] is not None:
+                try:
+                    out[str(r[0]).strip()] = float(_num(r[1]))
+                except Exception:
+                    pass
+        return out
+
+    per_axis = await _asyncio.gather(*[_one_axis(a) for a in axes])
+    labels = [_ascii(a.get("label") or ("axis%d" % i)) for i, a in enumerate(axes)]
+    # entities present on EVERY axis, ordered by their first-axis rank
+    common = None
+    for amap in per_axis:
+        keys = set(amap.keys())
+        common = keys if common is None else (common & keys)
+    if not common:
+        logger.warning("visuals: radar %r has no entity common to all axes; skipping", spec.get("id"))
+        return None
+    ordered = [e for e in per_axis[0].keys() if e in common][:8]
+    series = {e: [per_axis[i].get(e, 0.0) for i in range(len(axes))] for e in ordered}
+    if len(series) < 2:
+        return None
+    cspec = {"id": spec.get("id"), "title": spec.get("title"), "chart_type": "radar",
+             "categories": labels, "series": series}
     return _render_chart_local(cspec)
 
 
@@ -869,7 +1070,8 @@ async def render_visuals(
         }
 
     Returns ``(inline_images, figures)``:
-      * ``inline_images = [{content_id, content_type:"image/png", data:<base64>, filename}]``
+      * map images use URL/storage references: ``{content_id, content_type, url|storage_path, filename}``
+      * local/generated non-geo images may still use the legacy data path
       * ``figures = [{content_id, caption, after_heading}]`` (placement records).
 
     Each map/chart that fails to render is skipped (logged) so the report still sends.
@@ -888,7 +1090,29 @@ async def render_visuals(
         # CID must be a simple token usable in src="cid:..."; fold to a safe slug.
         return "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in _ascii(cid)) or f"{prefix}{seq}"
 
-    def _emit(spec: Dict[str, Any], prefix: str, b64: str) -> None:
+    def _emit_reference(spec: Dict[str, Any], prefix: str, reference: Dict[str, Any]) -> None:
+        cid = _cid(spec, prefix)
+        image: Dict[str, Any] = {
+            "content_id": cid,
+            "content_type": str(reference.get("content_type") or "image/png"),
+            "filename": cid + ".png",
+        }
+        url = str(reference.get("url") or "")
+        if url.startswith("http://") or url.startswith("https://"):
+            image["url"] = url
+        else:
+            # A file:// url or a storage_path-only reference points at a path only the
+            # rendering container can read; emitting it hard_fails delivery (W28M-1633).
+            return
+        for key in ("asset_id", "size_bytes", "expires_at", "storage_backend"):
+            if reference.get(key) is not None:
+                image[key] = reference[key]
+        inline_images.append(image)
+        figures.append({"content_id": cid,
+                        "caption": _ascii(spec.get("caption") or spec.get("title") or ""),
+                        "after_heading": spec.get("after")})
+
+    def _emit_data(spec: Dict[str, Any], prefix: str, b64: str) -> None:
         cid = _cid(spec, prefix)
         inline_images.append({"content_id": cid, "content_type": "image/png",
                               "data": b64, "filename": cid + ".png"})
@@ -899,22 +1123,32 @@ async def render_visuals(
     for m in visuals_spec.get("maps") or []:
         if not isinstance(m, dict):
             continue
-        b64 = await _render_one_map(m, dispatch_service, geo_service)
-        if b64:
-            _emit(m, "map", b64)
+        reference = await _render_one_map(m, dispatch_service, geo_service)
+        if not reference:
+            continue
+        b64 = reference.get("data")
+        if b64 and _is_png_b64(b64):
+            _emit_data(m, "map", b64)          # inline CID bytes — deliverable everywhere
+        elif reference.get("url"):
+            _emit_reference(m, "map", reference)
 
     charts = [c for c in (visuals_spec.get("charts") or []) if isinstance(c, dict)]
-    # Data-driven charts (spec has ``sql``) pull real numbers from the SQL agent — each
-    # query is a slow NL->SQL job, so fire them concurrently rather than serially.
-    sql_idx = [i for i, c in enumerate(charts) if c.get("sql")]
+    # Data-driven charts pull real numbers from the SQL agent — each query is a slow
+    # NL->SQL job, so fire them concurrently rather than serially. A radar chart with
+    # ``axes: [{label, sql}]`` runs one 2-column query per axis (the agent is reliable
+    # for 2-column results); any other chart with ``sql`` runs a single query.
+    def _is_multi_sql_radar(c):
+        return str(c.get("chart_type") or "").lower() in ("radar", "spider", "polar") and c.get("axes")
+    sql_idx = [i for i, c in enumerate(charts) if c.get("sql") and not _is_multi_sql_radar(c)]
+    radar_idx = [i for i, c in enumerate(charts) if _is_multi_sql_radar(c)]
     sql_b64: Dict[int, Optional[str]] = {}
-    if sql_idx:
+    if sql_idx or radar_idx:
         import asyncio as _asyncio
 
-        results = await _asyncio.gather(
-            *[_render_chart_from_sql(charts[i], dispatch_service, sql_service) for i in sql_idx],
-            return_exceptions=True)
-        for i, res in zip(sql_idx, results):
+        _tasks = ([_render_chart_from_sql(charts[i], dispatch_service, sql_service) for i in sql_idx]
+                  + [_render_radar_from_multi_sql(charts[i], dispatch_service, sql_service) for i in radar_idx])
+        results = await _asyncio.gather(*_tasks, return_exceptions=True)
+        for i, res in zip(sql_idx + radar_idx, results):
             sql_b64[i] = res if isinstance(res, str) else None
     for i, c in enumerate(charts):
         if i in sql_b64:
@@ -927,7 +1161,7 @@ async def render_visuals(
             if not b64:
                 b64 = await _render_one_chart(c, dispatch_service, http_get, chart_service)
         if b64:
-            _emit(c, "chart", b64)
+            _emit_data(c, "chart", b64)
 
     return inline_images, figures
 
@@ -935,22 +1169,29 @@ async def render_visuals(
 # --------------------------------------------------------------------------- #
 # HTML injection helpers (used by the document strategy)
 # --------------------------------------------------------------------------- #
-def figure_html(content_id: str, caption: str) -> str:
-    """A self-contained, inline-styled <figure> referencing the CID image (Gmail-safe)."""
+def figure_html(content_id: str, caption: str, max_width: str = "100%") -> str:
+    """A self-contained, inline-styled <figure> referencing the CID image (Gmail-safe).
+
+    ``max_width`` caps the rendered size (e.g. '560px' for maps, '400px' for photos) while
+    staying responsive on narrow screens, so figures don't dominate the page."""
     import html as _html
 
     cap = _html.escape(caption or "")
-    return ('<figure style="margin:18px 0;text-align:center">'
-            '<img src="cid:%s" alt="%s" style="max-width:100%%;border:1px solid #ccd;border-radius:4px">'
+    mw = _html.escape(str(max_width or "100%"), quote=True)
+    return ('<figure style="margin:16px auto;text-align:center;max-width:%s">'
+            '<img src="cid:%s" alt="%s" style="width:100%%;max-width:%s;height:auto;'
+            'border:1px solid #ccd;border-radius:4px">'
             '<figcaption style="font:13px Arial,Helvetica,sans-serif;color:#556;margin-top:5px">%s</figcaption>'
-            '</figure>') % (content_id, cap, cap)
+            '</figure>') % (mw, content_id, cap, mw, cap)
 
 
 def inject_figures(html: str, figures: List[Dict[str, Any]]) -> str:
     """Insert each figure's <img> block after its ``after_heading`` <h2>/<h3> in ``html``.
 
-    Figures without a matching heading (or no ``after_heading``) are prepended to the body
-    so they are never silently dropped. ``html`` is the already-rendered email HTML.
+    Figures without a matching heading (or no ``after_heading``) are anchored just AFTER the
+    first heading (the title <h1>, else the first <h2>) so they are never silently dropped and
+    never float above the title; only when the document has no heading at all do they fall back
+    to being appended before ``</body>``. ``html`` is the already-rendered email HTML.
     """
     import re as _re
 
@@ -958,7 +1199,7 @@ def inject_figures(html: str, figures: List[Dict[str, Any]]) -> str:
         cid = fig.get("content_id")
         if not cid:
             continue
-        block = figure_html(cid, str(fig.get("caption") or ""))
+        block = figure_html(cid, str(fig.get("caption") or ""), fig.get("max_width") or "100%")
         after = fig.get("after_heading")
         placed = False
         if after:
@@ -968,12 +1209,19 @@ def inject_figures(html: str, figures: List[Dict[str, Any]]) -> str:
                 html = html[:m.end()] + block + html[m.end():]
                 placed = True
         if not placed:
-            # prepend just inside <body> if present, else at the very start.
-            bm = _re.search(r"<body[^>]*>", html, _re.IGNORECASE)
-            if bm:
-                html = html[:bm.end()] + block + html[bm.end():]
+            # Never float an unanchored figure ABOVE the title (it "stands out without context").
+            # Place it just AFTER the first heading (the title <h1>, else the first <h2>) so it
+            # always lands below the title / inside the opening section; only if there is no
+            # heading at all do we fall back to appending before </body>.
+            hm = _re.search(r"</h1>", html, _re.IGNORECASE) or _re.search(r"</h2>", html, _re.IGNORECASE)
+            if hm:
+                html = html[:hm.end()] + block + html[hm.end():]
             else:
-                html = block + html
+                bm = _re.search(r"</body>", html, _re.IGNORECASE)
+                if bm:
+                    html = html[:bm.start()] + block + html[bm.start():]
+                else:
+                    html = html + block
     return html
 
 

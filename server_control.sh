@@ -76,6 +76,39 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 
+select_python_bin() {
+    local candidate
+    for candidate in \
+        "${CLOUD_DOG_SERVER_PYTHON:-}" \
+        "${PYTHON_BIN:-}" \
+        "$SCRIPT_DIR/venv/bin/python" \
+        "$SCRIPT_DIR/.venv/bin/python" \
+        "python3.12" \
+        "python3"; do
+        [ -z "$candidate" ] && continue
+        if [ ! -x "$candidate" ] && ! command -v "$candidate" >/dev/null 2>&1; then
+            continue
+        fi
+        if "$candidate" - <<'PY' >/dev/null 2>&1
+import importlib.util
+required = [
+    "cloud_dog_config",
+    "cloud_dog_logging",
+    "cloud_dog_api_kit",
+    "cloud_dog_storage",
+    "cloud_dog_cache",
+]
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+raise SystemExit(0 if not missing else 1)
+PY
+        then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    printf '%s\n' "python3"
+}
+
 is_known_server() {
     case "$1" in
         api|web|mcp|a2a) return 0 ;;
@@ -117,8 +150,10 @@ read_config() {
     local key=$1
     local default=$2
     local dotted_key
+    local python_bin
     dotted_key=$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]' | sed 's/__/./g')
-    python3 - "$dotted_key" "$default" <<'PY'
+    python_bin=$(select_python_bin)
+    "$python_bin" - "$dotted_key" "$default" <<'PY'
 import sys
 sys.path.insert(0, "src")
 from config.loader import get_config
@@ -360,29 +395,10 @@ start_server() {
         return 1
     fi
     
-    # Prefer the project venv only when it can actually import the required
-    # platform/runtime modules. Some authorised baseline worktrees keep a stale
-    # venv around; in that case fall back to the active python3 instead of
-    # booting a partially provisioned interpreter.
-    local python_bin="$SCRIPT_DIR/venv/bin/python"
-    if [ -x "$python_bin" ]; then
-        if ! "$python_bin" - <<'PY' >/dev/null 2>&1
-import importlib.util
-required = [
-    "cloud_dog_config",
-    "cloud_dog_logging",
-    "cloud_dog_api_kit",
-    "cloud_dog_storage",
-]
-missing = [name for name in required if importlib.util.find_spec(name) is None]
-raise SystemExit(0 if not missing else 1)
-PY
-        then
-            python_bin="python3"
-        fi
-    else
-        python_bin="python3"
-    fi
+    # Use the interpreter that can import the runtime platform packages. Isolated
+    # worktrees often use `.venv` while older checkouts used `venv`.
+    local python_bin
+    python_bin=$(select_python_bin)
 
     # Detach into a separate session so test/plugin process-group cleanup does not
     # send SIGTERM into the managed local server stack mid-run.

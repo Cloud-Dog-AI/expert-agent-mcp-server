@@ -1002,6 +1002,50 @@ class MCPTools:
             logger.error(f"Invoke service tool error: {e}", exc_info=True)
             return {"error": str(e)}
 
+    async def run_research_cycle_tool(
+        self,
+        query: str,
+        depth: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        budget: Optional[Dict[str, Any]] = None,
+        image_refs: Optional[List[str]] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Consume search-mcp research_stream and return collected progress events."""
+        try:
+            from src.core.agentic.research_cycle import ResearchCycleManager
+
+            with self._db_scope() as db:
+                manager = ResearchCycleManager(db)
+                relayed: List[Dict[str, Any]] = []
+
+                async def _record_progress(event: Dict[str, Any]) -> None:
+                    relayed.append(
+                        {
+                            "id": event.get("id"),
+                            "sequence": event.get("sequence"),
+                            "type": event.get("type"),
+                            "correlation_id": event.get("correlation_id"),
+                        }
+                    )
+
+                result = await manager.run_research_cycle(
+                    query=query,
+                    depth=depth,
+                    tenant_id=tenant_id or "default",
+                    correlation_id=correlation_id,
+                    budget=budget or {},
+                    image_refs=image_refs or [],
+                    auth_context=auth_context or {},
+                    on_event=_record_progress,
+                )
+                result["relayed_progress"] = relayed
+                return result
+        except Exception as e:
+            logger.error(f"Run research cycle tool error: {e}", exc_info=True)
+            return {"error": str(e)}
+
     async def code_execute_tool(
         self,
         code: str,

@@ -472,6 +472,7 @@ class APIServer(BaseServer):
             auth,
             api_keys,
             services,
+            providers,
         )
         from src.servers.mcp.tools import MCPTools
         from fastapi import Request
@@ -514,6 +515,7 @@ class APIServer(BaseServer):
         include_api_router(users.router)
         include_api_router(groups.router)
         include_api_router(experts.router)
+        include_api_router(providers.router)
         include_api_router(channels.router)
         include_api_router(knowledge.router)
         include_api_router(jobs.router)
@@ -546,20 +548,21 @@ class APIServer(BaseServer):
             self.app.include_router(api_keys.router, prefix=self._api_base_path + "/admin", include_in_schema=False)
         # W28A-876: mount the canonical SHARED cloud_dog_idam idam_v1_router (resource-registry +
         # rbac-bindings) so the RBAC page resolves /idam/v1/* (parity with admin_roles).
-        try:
-            from cloud_dog_idam.api.fastapi.router import (
-                idam_v1_router as _idam_v1_router,
-                set_idam_v1_engine as _set_idam_v1_engine,
-            )
+        # Mounting the required shared router must not depend on an optional
+        # engine-setter symbol.  cloud_dog_idam 0.5.3 exports idam_v1_router but
+        # not set_idam_v1_engine; importing both in one statement previously
+        # discarded the router and left every RBAC binding request as a 404.
+        from cloud_dog_idam.api.fastapi.router import idam_v1_router as _idam_v1_router
 
-            try:
-                from src.database.connection import get_engine as _get_idam_engine
-                _set_idam_v1_engine(_get_idam_engine())
-            except Exception:
-                pass
-            include_api_router(_idam_v1_router)
-        except Exception:
-            pass
+        include_api_router(_idam_v1_router)
+        try:
+            from cloud_dog_idam.api.fastapi.router import set_idam_v1_engine as _set_idam_v1_engine
+        except ImportError:
+            _set_idam_v1_engine = None
+        if _set_idam_v1_engine is not None:
+            from src.database.connection import get_engine as _get_idam_engine
+
+            _set_idam_v1_engine(_get_idam_engine())
         if create_cache_router is not None:
             include_api_router(create_cache_router())
 

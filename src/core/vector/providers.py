@@ -36,6 +36,7 @@ import asyncio
 from datetime import datetime, timezone
 import importlib
 import json
+import re
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -539,6 +540,7 @@ class CloudDogVDBProvider(VectorStoreProvider):
             raise RuntimeError(f"{self.provider_label} provider not initialized.")
 
         collection_name = str(collection or self._default_collection)
+        await self._ensure_collection(collection_name, self._runtime_config)
         out_ids = ids or [str(uuid.uuid4()) for _ in documents]
 
         records: List[Record] = []
@@ -1482,6 +1484,48 @@ class PGVectorProvider(CloudDogVDBProvider):
     provider_id = "pgvector"
     provider_label = "PGVector"
 
+    @staticmethod
+    def _legacy_table_name(collection: str) -> str:
+        """Validate and return a pgvector table name for legacy SQL paths."""
+        table = str(collection or "expert_agent_default")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+            raise ValueError(f"Invalid pgvector collection/table name: {table}")
+        return table
+
+    async def _legacy_ensure_collection_table(
+        self, collection: str, dimension: int
+    ) -> None:
+        """Create or normalize the legacy pgvector table before CRUD statements."""
+        table = self._legacy_table_name(collection)
+        dim = int(dimension or 0)
+        if dim <= 0:
+            dim = 1024
+
+        try:
+            await self.client.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            # Managed databases may preinstall pgvector while denying CREATE EXTENSION.
+            # The following CREATE TABLE will fail clearly if the type is unavailable.
+            pass
+
+        await self.client.execute(
+            f"CREATE TABLE IF NOT EXISTS {table} ("
+            "id text primary key, "
+            "text text, "
+            "content text, "
+            "metadata jsonb not null default '{}'::jsonb, "
+            f"embedding vector({dim}) not null)"
+        )
+        await self.client.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS text text"
+        )
+        await self.client.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS content text"
+        )
+        await self.client.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS metadata jsonb not null default '{{}}'::jsonb"
+        )
+
     async def _try_legacy_initialize(self, config: Dict[str, Any]) -> bool:
         """Initialise through asyncpg/pgvector for compatibility with legacy unit tests."""
         try:
@@ -1518,11 +1562,24 @@ class PGVectorProvider(CloudDogVDBProvider):
         """Add documents through injected asyncpg-style test client."""
         out_ids = ids or [str(uuid.uuid4()) for _ in documents]
         embeddings = await self.embedding_manager.generate_batch_embeddings(documents)
+        dimension = (
+            len(embeddings[0])
+            if embeddings
+            else self.embedding_manager.get_embedding_dimension()
+        )
+        table = self._legacy_table_name(collection)
+        await self._legacy_ensure_collection_table(collection, dimension)
 
         for index, document in enumerate(documents):
             metadata = metadatas[index] if metadatas and index < len(metadatas) else {}
             await self.client.execute(
-                f"INSERT INTO {collection} (id, text, metadata, embedding) VALUES ($1, $2, $3, $4)",
+                f"INSERT INTO {table} (id, text, content, metadata, embedding) "
+                "VALUES ($1, $2, $2, $3, $4) "
+                "ON CONFLICT (id) DO UPDATE SET "
+                "text = EXCLUDED.text, "
+                "content = EXCLUDED.content, "
+                "metadata = EXCLUDED.metadata, "
+                "embedding = EXCLUDED.embedding",
                 out_ids[index],
                 document,
                 json.dumps(metadata),
@@ -1541,14 +1598,16 @@ class PGVectorProvider(CloudDogVDBProvider):
         """Search through injected asyncpg-style test client."""
         _ = search_options
         vector = await self.embedding_manager.generate_embedding(query)
+        table = self._legacy_table_name(collection)
+        await self._legacy_ensure_collection_table(collection, len(vector))
 
         if filter:
             _ = filter
-            sql = f"SELECT id, text, metadata, 0.9 as similarity FROM {collection} LIMIT $1"
+            sql = f"SELECT id, COALESCE(text, content, '') AS text, metadata, 0.9 as similarity FROM {table} LIMIT $1"
         else:
-            sql = f"SELECT id, text, metadata, 0.9 as similarity FROM {collection} LIMIT $1"
+            sql = f"SELECT id, COALESCE(text, content, '') AS text, metadata, 0.9 as similarity FROM {table} LIMIT $1"
 
-        rows = await self.client.fetch(sql, n_results, vector)
+        rows = await self.client.fetch(sql, n_results)
         out: List[Dict[str, Any]] = []
         for row in rows:
             metadata_raw = row.get("metadata", "{}") if isinstance(row, dict) else "{}"
@@ -1582,7 +1641,10 @@ class PGVectorProvider(CloudDogVDBProvider):
     async def _legacy_delete_document(self, collection: str, doc_id: str) -> bool:
         """Delete document through injected asyncpg-style test client."""
         try:
-            await self.client.execute(f"DELETE FROM {collection} WHERE id = $1", doc_id)
+            await self.client.execute(
+                f"DELETE FROM {self._legacy_table_name(collection)} WHERE id = $1",
+                doc_id,
+            )
             return True
         except Exception:
             return False
@@ -1597,8 +1659,10 @@ class PGVectorProvider(CloudDogVDBProvider):
         """Update document through injected asyncpg-style test client."""
         try:
             embedding = await self.embedding_manager.generate_embedding(content)
+            table = self._legacy_table_name(collection)
+            await self._legacy_ensure_collection_table(collection, len(embedding))
             await self.client.execute(
-                f"UPDATE {collection} SET text = $1, metadata = $2, embedding = $3 WHERE id = $4",
+                f"UPDATE {table} SET text = $1, content = $1, metadata = $2, embedding = $3 WHERE id = $4",
                 content,
                 json.dumps(metadata or {}),
                 embedding,
@@ -1615,15 +1679,16 @@ class PGVectorProvider(CloudDogVDBProvider):
     ) -> int:
         """Count documents through injected asyncpg-style test client."""
         try:
+            table = self._legacy_table_name(collection)
             if filter:
                 key, value = next(iter(filter.items()))
                 result = await self.client.fetchval(
-                    f"SELECT COUNT(*) FROM {collection} WHERE metadata->>$1 = $2",
+                    f"SELECT COUNT(*) FROM {table} WHERE metadata->>$1 = $2",
                     key,
                     str(value),
                 )
             else:
-                result = await self.client.fetchval(f"SELECT COUNT(*) FROM {collection}")
+                result = await self.client.fetchval(f"SELECT COUNT(*) FROM {table}")
             return int(result)
         except Exception:
             return 0

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -50,6 +51,32 @@ class UpdateServiceRequest(BaseModel):
     endpoint_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
     auth_config: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+class TestServiceEndpointRequest(BaseModel):
+    endpoint_url: str = Field(min_length=1, max_length=500)
+    service_type: Optional[str] = Field(default=None, max_length=100)
+    auth_config: Optional[Dict[str, Any]] = None
+
+
+def _endpoint_auth_headers(auth_config: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Build the outbound probe header without returning secret material."""
+    if not auth_config:
+        return {}
+
+    auth_type = str(auth_config.get("type") or "none").strip().lower()
+    value = str(auth_config.get("value") or "").strip()
+    if not value or auth_type == "none":
+        return {}
+
+    if auth_type == "bearer":
+        scheme = str(auth_config.get("scheme") or "Bearer").strip()
+        return {"Authorization": f"{scheme} {value}"}
+    if auth_type in {"api_key", "custom_header"}:
+        header_name = str(auth_config.get("header_name") or "X-API-Key").strip()
+        scheme = str(auth_config.get("scheme") or "").strip()
+        return {header_name: f"{scheme} {value}".strip()}
+    return {}
 
 
 def _serialize_service(service: ExternalService) -> Dict[str, Any]:
@@ -127,6 +154,47 @@ async def list_services(
     manager = ServiceManager(db)
     services = manager.list_services(service_type=service_type)
     return {"total": len(services), "services": [_serialize_service(s) for s in services]}
+
+
+@router.post("/test-endpoint")
+async def test_service_endpoint(
+    request: TestServiceEndpointRequest,
+    _: User = Depends(verify_admin),
+) -> Dict[str, Any]:
+    """Probe an endpoint from the service editor without persisting changes."""
+    endpoint_url = request.endpoint_url.strip()
+    parsed = urlparse(endpoint_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Endpoint URL must use HTTP or HTTPS")
+
+    service_type = str(request.service_type or "rest").strip().lower()
+    manager = ServiceManager()
+    try:
+        response = await manager.client.get(
+            endpoint_url,
+            headers=_endpoint_auth_headers(request.auth_config),
+            timeout=5.0,
+        )
+        healthy = response.status_code < 500
+        return {
+            "endpoint_url": endpoint_url,
+            "resolved_url": str(response.url),
+            "detected_type": service_type,
+            "healthy": healthy,
+            "health_status": "healthy" if healthy else "unhealthy",
+            "status_code": response.status_code,
+            "detail": f"Endpoint returned HTTP {response.status_code}",
+        }
+    except Exception as exc:
+        return {
+            "endpoint_url": endpoint_url,
+            "resolved_url": endpoint_url,
+            "detected_type": service_type,
+            "healthy": False,
+            "health_status": "unhealthy",
+            "status_code": None,
+            "detail": f"Endpoint probe failed: {type(exc).__name__}",
+        }
 
 
 @router.get("/{service_id}")

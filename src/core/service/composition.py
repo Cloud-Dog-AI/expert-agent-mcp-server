@@ -31,10 +31,30 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+SEARCH_MCP_SERVICE_NAME = "search-mcp"
+SEARCH_MCP_AUTH_CONFIG_KEY = "dev.services.searchmcp.api_key"
+SEARCH_MCP_URI_CONFIG_KEY = "dev.services.searchmcp.uri"
+
+SEARCH_MCP_TOOL_CATALOG: List[Dict[str, Any]] = [
+    {
+        "name": "research_stream",
+        "description": "Smart Search Agent progress stream; SSE clients use /mcp/research/stream.",
+    },
+    {
+        "name": "caption_image",
+        "description": "Caption an image URL or file-mcp reference via the search-mcp vision-LM.",
+    },
+    {
+        "name": "extract_chart",
+        "description": "Extract structured chart data from an image URL or file-mcp reference.",
+    },
+]
+
+
 class ServiceCompositionManager:
     """Discover and invoke external services bound to experts."""
 
-    _tool_cache: Dict[int, Tuple[float, List[Dict[str, Any]]]] = {}
+    _tool_cache: Dict[Tuple[int, str], Tuple[float, List[Dict[str, Any]]]] = {}
     _circuit_breakers: Dict[int, CircuitBreaker] = {}
 
     def __init__(self, db: Optional[Session] = None, client: Optional[httpx.AsyncClient] = None):
@@ -55,6 +75,10 @@ class ServiceCompositionManager:
             return json.loads(raw) or {}
         except Exception:
             return {}
+
+    @staticmethod
+    def _tool_cache_key(service: ExternalService) -> Tuple[int, str]:
+        return (int(service.id), str(service.endpoint_url))
 
     def _get_circuit_breaker(self, binding: Optional[ServiceBinding]) -> CircuitBreaker:
         service_id = int(binding.service_id if binding else 0)
@@ -83,6 +107,13 @@ class ServiceCompositionManager:
         if endpoint.endswith("/api"):
             return endpoint + "/health"
         return endpoint + "/health"
+
+    @staticmethod
+    def _resolve_search_availability_url(service: ExternalService) -> str:
+        endpoint = str(service.endpoint_url).rstrip("/")
+        if endpoint.endswith("/mcp"):
+            endpoint = endpoint[: -len("/mcp")]
+        return endpoint + "/v1/availability"
 
     @staticmethod
     def _tool_payload_to_list(payload: Any) -> List[Dict[str, Any]]:
@@ -169,22 +200,137 @@ class ServiceCompositionManager:
         db = self._get_db()
         return db.query(ServiceBinding).filter(ServiceBinding.service_id == service_id).first()
 
+    def ensure_search_mcp_service(self) -> ExternalService:
+        """Ensure the managed search-mcp ExternalService row exists.
+
+        The row stores only config-key references for credentials. Runtime values
+        are resolved by ``_resolve_credential`` from the platform config/Vault
+        hierarchy, so no API key is written to ``external_services``.
+        """
+        db = self._get_db()
+        service_name = str(
+            get_config("research.search_service_name") or SEARCH_MCP_SERVICE_NAME
+        ).strip()
+        endpoint = str(
+            get_config(SEARCH_MCP_URI_CONFIG_KEY) or get_config("research.search_url") or ""
+        ).strip()
+        if not endpoint:
+            raise RuntimeError(
+                f"{SEARCH_MCP_URI_CONFIG_KEY} or research.search_url must be configured"
+            )
+
+        auth_config = {
+            "type": "api_key",
+            "config_key": str(
+                get_config("research.search_service_api_key_config_key")
+                or SEARCH_MCP_AUTH_CONFIG_KEY
+            ),
+        }
+        metadata = {
+            "managed_by": "expert-agent",
+            "lane": "W28F-947",
+            "wire_contract": "search-mcp research_stream/caption_image/extract_chart",
+            "discovered_tools": SEARCH_MCP_TOOL_CATALOG,
+        }
+
+        service = db.query(ExternalService).filter(ExternalService.name == service_name).first()
+        if service:
+            if service.type != "mcp":
+                raise ValueError(f"Service '{service_name}' exists but is not an MCP service")
+            changed = False
+            if service.endpoint_url != endpoint:
+                service.endpoint_url = endpoint
+                changed = True
+            existing_auth = self._parse_json(service.auth_config_json)
+            if existing_auth.get("config_key") != auth_config["config_key"]:
+                service.auth_config_json = json.dumps(auth_config)
+                changed = True
+            existing_metadata = self._parse_json(service.metadata_json)
+            merged_metadata = dict(existing_metadata)
+            merged_metadata.update(metadata)
+            if merged_metadata != existing_metadata:
+                service.metadata_json = json.dumps(merged_metadata)
+                changed = True
+            if not service.enabled:
+                service.enabled = True
+                changed = True
+            if changed:
+                db.commit()
+                db.refresh(service)
+        else:
+            service = ExternalService(
+                name=service_name,
+                type="mcp",
+                endpoint_url=endpoint,
+                auth_config_json=json.dumps(auth_config),
+                health_status="unknown",
+                enabled=True,
+                metadata_json=json.dumps(metadata),
+            )
+            db.add(service)
+            db.commit()
+            db.refresh(service)
+
+        self._tool_cache[self._tool_cache_key(service)] = (time.time(), SEARCH_MCP_TOOL_CATALOG)
+        return service
+
     def get_cached_tools(self, service_id: int) -> List[Dict[str, Any]]:
         """Return cached discovered tools without probing the remote service."""
-        cached = self._tool_cache.get(service_id)
-        if cached:
-            return cached[1]
-
         db = self._get_db()
         service = db.query(ExternalService).filter(ExternalService.id == service_id).first()
         if not service:
             raise ValueError("Service not found")
+
+        cached = self._tool_cache.get(self._tool_cache_key(service))
+        if cached:
+            return cached[1]
 
         metadata = self._parse_json(service.metadata_json)
         tools = metadata.get("discovered_tools")
         if isinstance(tools, list):
             return tools
         return []
+
+    async def search_availability(
+        self,
+        service: Optional[ExternalService] = None,
+        *,
+        persona_id: Optional[str] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Read SearchMCP's external-service gate before starting live research."""
+        service = service or self.ensure_search_mcp_service()
+        params: Dict[str, str] = {}
+        if persona_id:
+            params["persona_id"] = str(persona_id)
+        try:
+            response = await self.client.get(
+                self._resolve_search_availability_url(service),
+                headers=self._auth_headers(service, auth_context=auth_context),
+                params=params,
+                timeout=5.0,
+            )
+            if response.status_code == 404:
+                return {
+                    "status": "available",
+                    "action": "legacy_no_gate",
+                    "legacy": True,
+                }
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload
+            return {
+                "status": "available",
+                "action": "gate_non_object_payload_fail_open",
+            }
+        except Exception as exc:
+            logger.warning("SearchMCP availability gate unavailable: %s", exc)
+            return {
+                "status": "available",
+                "action": "gate_unreachable_fail_open",
+                "detail": str(exc),
+            }
 
     async def health_check(self, service_id: int) -> Dict[str, Any]:
         db = self._get_db()
@@ -207,14 +353,15 @@ class ServiceCompositionManager:
     async def discover_tools(self, service_id: int) -> List[Dict[str, Any]]:
         now = time.time()
         ttl = int(get_config("service_composition.tool_discovery_cache_ttl") or 300)
-        cached = self._tool_cache.get(service_id)
-        if cached and now - cached[0] < ttl:
-            return cached[1]
-
         db = self._get_db()
         service = db.query(ExternalService).filter(ExternalService.id == service_id).first()
         if not service:
             raise ValueError("Service not found")
+
+        cache_key = self._tool_cache_key(service)
+        cached = self._tool_cache.get(cache_key)
+        if cached and now - cached[0] < ttl:
+            return cached[1]
 
         tools: List[Dict[str, Any]] = []
         metadata = self._parse_json(service.metadata_json)
@@ -233,7 +380,7 @@ class ServiceCompositionManager:
         metadata["discovered_tools"] = tools
         service.metadata_json = json.dumps(metadata)
         db.commit()
-        self._tool_cache[service_id] = (now, tools)
+        self._tool_cache[cache_key] = (now, tools)
         return tools
 
     async def get_available_tools(self, expert_config_id: int) -> List[Dict[str, Any]]:

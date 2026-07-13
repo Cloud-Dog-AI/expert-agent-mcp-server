@@ -50,7 +50,8 @@ ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 ARG INCLUDE_BROWSER_TOOLS=0
 
 # Install system dependencies.
-RUN apt-get update \
+RUN set -e; \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         netcat-openbsd \

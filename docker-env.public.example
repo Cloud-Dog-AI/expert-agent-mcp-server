@@ -27,8 +27,8 @@ CLOUD_DOG__EXPERT__AUTH__JWT_SECRET=<your-jwt-secret-here>
 
 # ── Database ───────────────────────────────────────────────────────
 # Default is local SQLite. For a server database supply your own URI, e.g.:
-#   CLOUD_DOG__EXPERT__DB__URI=postgresql://<user>:<redacted>@db.example.com:5432/expert
-#   CLOUD_DOG__EXPERT__DB__URI=mysql://<user>:<redacted>@db.example.com:3306/expert
+#   CLOUD_DOG__EXPERT__DB__URI=postgresql://user:password@db.example.com:5432/expert
+#   CLOUD_DOG__EXPERT__DB__URI=mysql://user:password@db.example.com:3306/expert
 CLOUD_DOG__EXPERT__DB__URI=sqlite:///expert.db
 CLOUD_DOG__EXPERT__DB__ECHO=false
 

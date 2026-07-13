@@ -28,3 +28,34 @@ data/
 *.pyc
 working/
 archive/
+
+# ---------------------------------------------------------------------------
+# Keep build/ops/dev-only artifacts out of the public image (COPY . .).
+# These are not read at runtime and carry internal FQDNs / IPs / Vault details.
+# ---------------------------------------------------------------------------
+# Internal docs and agent/ops notes
+docs/
+AGENT-LESSONS.md
+CONTEXT-SUMMARY.md
+RULES.md
+BUILD.md
+EXTERNAL-BUILD.md
+PUBLICATION-SMOKE.md
+CHANGELOG.md
+# Build / local-run / setup scripts (build the image via ./Dockerfile, not baked in)
+docker-build.sh
+local-docker-server.sh
+setup_local.sh
+fix.sh
+scripts/docker-build.sh
+scripts/docker-run-single.sh
+scripts/docker-smoke.sh
+scripts/validate-vault.sh
+scripts/verify_thread_b_t0_t3_preprod.py
+scripts/setup_external_services.py
+scripts/validate_external_services.py
+scripts/run-trackA-gate.sh
+scripts/run-trackB-gate.sh
+scripts/sequential_test_retry.sh
+# Internal integration-test env file (contains internal example addresses)
+config/env-docker-it-server

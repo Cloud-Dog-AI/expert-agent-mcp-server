@@ -29,10 +29,10 @@ Recent Changes:
 - Added DELETE endpoint for expert deletion
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import json
 from pydantic import BaseModel, Field
 from cloud_dog_cache.invalidation import CONFIG_CHANGE, PROMPT_CHANGE, invalidate_event
@@ -49,6 +49,108 @@ from src.servers.api.auth import require_permission, verify_admin, verify_api_ke
 router = APIRouter(prefix="/experts", tags=["experts"], dependencies=[Depends(require_permission("experts:read"))])
 
 
+# Keys of the per-expert LLM config carried inside llm_params_json. These are APPLIED at
+# execution (transactional executor + agent adapters) and must be surfaced on every expert
+# response so the WebUI expert form can display and round-trip them (FR-053).
+_LLM_VIEW_KEYS = ("temperature", "top_k", "max_tokens", "num_ctx", "num_predict", "think")
+ExpertToolEntry = Union[Dict[str, Any], str]
+
+
+def _llm_view(llm_params_json: Optional[str]) -> Dict[str, Any]:
+    """Surface the editable per-expert LLM settings from the stored llm_params JSON."""
+    params: Dict[str, Any] = {}
+    if llm_params_json:
+        try:
+            params = json.loads(llm_params_json) or {}
+        except Exception:
+            params = {}
+    view: Dict[str, Any] = {k: params.get(k) for k in _LLM_VIEW_KEYS}
+    view["llm_params"] = params
+    return view
+
+
+def _merge_llm_config(llm_params: Optional[Dict[str, Any]], request: BaseModel) -> Dict[str, Any]:
+    """Fold any top-level per-expert LLM settings (temperature/top_k/max_tokens/num_ctx/
+    num_predict/think) into the llm_params dict so they are persisted in one place and
+    APPLIED at execution (FR-053). Explicit llm_params keys win over the top-level mirror."""
+    merged: Dict[str, Any] = dict(llm_params or {})
+    for key in _LLM_VIEW_KEYS:
+        val = getattr(request, key, None)
+        if val is not None and key not in merged:
+            merged[key] = val
+    return merged
+
+
+def _normalise_tool_entries(tools: Optional[List[ExpertToolEntry]]) -> Optional[List[ExpertToolEntry]]:
+    """Validate and copy expert tool entries while preserving legacy string tools."""
+    if tools is None:
+        return None
+    normalised: List[ExpertToolEntry] = []
+    for idx, item in enumerate(tools):
+        if isinstance(item, str):
+            value = item.strip()
+            if not value:
+                raise ValueError(f"tools[{idx}] must not be empty")
+            normalised.append(value)
+            continue
+
+        if not isinstance(item, dict):
+            raise ValueError(f"tools[{idx}] must be a string or structured object")
+
+        has_sub_expert = item.get("sub_expert_id") is not None
+        has_service_tool = item.get("service") is not None or item.get("tool") is not None
+        if has_sub_expert and has_service_tool:
+            raise ValueError(
+                f"tools[{idx}] must use either sub_expert_id or service/tool, not both"
+            )
+        if has_sub_expert:
+            try:
+                sub_expert_id = int(item["sub_expert_id"])
+            except (TypeError, ValueError):
+                raise ValueError(f"tools[{idx}].sub_expert_id must be an integer")
+            if sub_expert_id <= 0:
+                raise ValueError(f"tools[{idx}].sub_expert_id must be positive")
+            copied: Dict[str, Any] = {"sub_expert_id": sub_expert_id}
+            if item.get("name"):
+                copied["name"] = str(item["name"]).strip()
+            if item.get("description"):
+                copied["description"] = str(item["description"]).strip()
+            normalised.append(copied)
+            continue
+
+        service = item.get("service")
+        tool = item.get("tool")
+        if not isinstance(service, str) or not service.strip():
+            raise ValueError(f"tools[{idx}].service is required")
+        if not isinstance(tool, str) or not tool.strip():
+            raise ValueError(f"tools[{idx}].tool is required")
+
+        copied = dict(item)
+        copied["service"] = service.strip()
+        copied["tool"] = tool.strip()
+        for key in ("default_profile", "default_collection", "default_channel", "collection_template"):
+            if key in copied and copied[key] is not None:
+                if not isinstance(copied[key], str) or not copied[key].strip():
+                    raise ValueError(f"tools[{idx}].{key} must be a non-empty string")
+                copied[key] = copied[key].strip()
+        if "arguments" in copied and copied["arguments"] is not None and not isinstance(copied["arguments"], dict):
+            raise ValueError(f"tools[{idx}].arguments must be an object")
+        if "description" in copied and copied["description"] is not None:
+            copied["description"] = str(copied["description"]).strip()
+        normalised.append(copied)
+    return normalised
+
+
+def _decode_tools_json(raw: Optional[str]) -> List[ExpertToolEntry]:
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except Exception:
+        return []
+    return items if isinstance(items, list) else []
+
+
 class CreateExpertRequest(BaseModel):
     name: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
@@ -57,8 +159,14 @@ class CreateExpertRequest(BaseModel):
     llm_model: Optional[str] = Field(default=None, min_length=1)
     llm_base_url: Optional[str] = None
     llm_params: Optional[Dict[str, Any]] = None
+    temperature: Optional[float] = None
+    top_k: Optional[int] = None
+    max_tokens: Optional[int] = None
+    num_ctx: Optional[int] = None
+    num_predict: Optional[int] = None
+    think: Optional[bool] = None
     prompt_template: Optional[str] = None
-    tools: Optional[List[str]] = None
+    tools: Optional[List[ExpertToolEntry]] = None
     enabled: bool = True
     access_control: Optional[Dict[str, Any]] = None
 
@@ -72,8 +180,8 @@ async def create_expert(
     """Create a new expert configuration."""
     manager = ExpertManager(db)
     try:
-        # Build llm_params dict if llm_base_url is provided
-        llm_params = request.llm_params or {}
+        # Build llm_params dict: fold in the per-expert LLM config + optional base_url
+        llm_params = _merge_llm_config(request.llm_params, request)
         if request.llm_base_url:
             llm_params["base_url"] = request.llm_base_url
 
@@ -85,7 +193,7 @@ async def create_expert(
             llm_model=request.llm_model,
             llm_params=llm_params if llm_params else None,
             prompt_template=request.prompt_template,
-            tools=request.tools,
+            tools=_normalise_tool_entries(request.tools),
             enabled=request.enabled,
             access_control=request.access_control,
         )
@@ -114,6 +222,8 @@ async def create_expert(
             "description": expert.description,
             "llm_provider": expert.llm_provider,
             "llm_model": expert.llm_model,
+            **_llm_view(expert.llm_params_json),
+            "tools": _decode_tools_json(expert.tools_json),
             "enabled": expert.enabled,
             "created_at": expert.created_at.isoformat() if expert.created_at else None,
             "updated_at": expert.updated_at.isoformat() if expert.updated_at else None,
@@ -144,7 +254,9 @@ async def list_experts(
                 "description": e.description,
                 "llm_provider": e.llm_provider,
                 "llm_model": e.llm_model,
+                "tools": _decode_tools_json(e.tools_json),
                 "enabled": e.enabled,
+                **_llm_view(e.llm_params_json),
                 "created_at": e.created_at.isoformat() if e.created_at else None,
                 "updated_at": e.updated_at.isoformat() if e.updated_at else None,
             }
@@ -180,12 +292,7 @@ async def get_expert(
         except Exception:
             pass
 
-    tools: List[str] = []
-    if expert.tools_json:
-        try:
-            tools = json.loads(expert.tools_json) or []
-        except Exception:
-            tools = []
+    tools = _decode_tools_json(expert.tools_json)
 
     return {
         "id": expert.id,
@@ -212,8 +319,14 @@ class UpdateExpertRequest(BaseModel):
     llm_model: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_params: Optional[Dict[str, Any]] = None
+    temperature: Optional[float] = None
+    top_k: Optional[int] = None
+    max_tokens: Optional[int] = None
+    num_ctx: Optional[int] = None
+    num_predict: Optional[int] = None
+    think: Optional[bool] = None
     prompt_template: Optional[str] = None
-    tools: Optional[List[str]] = None
+    tools: Optional[List[ExpertToolEntry]] = None
     enabled: Optional[bool] = None
     access_control: Optional[Dict[str, Any]] = None
 
@@ -238,6 +351,12 @@ class ExecuteExpertRequest(BaseModel):
     input_text: str
     parameters: Optional[Dict[str, Any]] = None
     context: Optional[Dict[str, Any]] = None
+    # EXPWEB-029: the WebUI Test Query popup submits the execution as an async job so
+    # it can render job/progress and poll GET /jobs/{id}. Default async for browser
+    # callers (no explicit sync request) while keeping the synchronous contract for
+    # API clients that omit the flag and don't want a job.
+    async_mode: Optional[bool] = None
+    mode: Optional[str] = None
 
 
 def _serialize_service_binding(
@@ -308,14 +427,31 @@ async def update_expert(
         if request.access_control is not None:
             update_data["access_control"] = request.access_control
         if request.tools is not None:
-            update_data["tools"] = request.tools
+            update_data["tools"] = _normalise_tool_entries(request.tools)
 
-        # Handle llm_params with base_url
-        if request.llm_params is not None or request.llm_base_url is not None:
-            llm_params = request.llm_params or {}
+        # Per-expert LLM config: MERGE incoming settings into the existing llm_params so
+        # stored keys (base_url / api_key) are preserved across partial edits (FR-053).
+        llm_cfg_present = (
+            request.llm_params is not None
+            or request.llm_base_url is not None
+            or any(getattr(request, k) is not None for k in _LLM_VIEW_KEYS)
+        )
+        if llm_cfg_present:
+            existing = manager.get_expert(expert_id=expert_id)
+            merged: Dict[str, Any] = {}
+            if existing and existing.llm_params_json:
+                try:
+                    merged = json.loads(existing.llm_params_json) or {}
+                except Exception:
+                    merged = {}
+            merged.update(request.llm_params or {})
+            for key in _LLM_VIEW_KEYS:
+                val = getattr(request, key, None)
+                if val is not None:
+                    merged[key] = val
             if request.llm_base_url:
-                llm_params["base_url"] = request.llm_base_url
-            update_data["llm_params"] = llm_params
+                merged["base_url"] = request.llm_base_url
+            update_data["llm_params"] = merged
 
         expert = manager.update_expert(expert_id, **update_data)
         if not expert:
@@ -330,13 +466,6 @@ async def update_expert(
             )
         except Exception:
             pass
-
-        llm_params = {}
-        if expert.llm_params_json:
-            try:
-                llm_params = json.loads(expert.llm_params_json)
-            except Exception:
-                pass
 
         publish_config_change_event(
             action="update",
@@ -353,7 +482,8 @@ async def update_expert(
             "description": expert.description,
             "llm_provider": expert.llm_provider,
             "llm_model": expert.llm_model,
-            "llm_params": llm_params,
+            **_llm_view(expert.llm_params_json),
+            "tools": _decode_tools_json(expert.tools_json),
             "enabled": expert.enabled,
         }
     except ValueError as e:
@@ -483,6 +613,60 @@ async def unbind_expert_service(
     return {"success": True, "expert_id": expert_id, "service_id": service_id}
 
 
+class BatchServicesRequest(BaseModel):
+    service_ids: List[int] = Field(default_factory=list)
+
+
+@router.put("/{expert_id}/services/batch")
+async def batch_set_expert_services(
+    expert_id: int,
+    request: BatchServicesRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """Replace the expert's service bindings with exactly ``service_ids``.
+
+    The WebUI Expert form persists the full checkbox selection in one call
+    (EXPWEB-026). Adds missing bindings, removes bindings not in the set, and
+    returns the resulting binding list so the form can re-render the count.
+    """
+    manager = ExpertManager(db)
+    if not manager.get_expert(expert_id=expert_id):
+        raise HTTPException(status_code=404, detail="Expert configuration not found")
+
+    desired = list(dict.fromkeys(request.service_ids))  # de-dupe, preserve order
+    valid_ids = {
+        row.id
+        for row in db.query(ExternalService.id).filter(ExternalService.id.in_(desired)).all()
+    } if desired else set()
+
+    existing = (
+        db.query(ServiceBinding)
+        .filter(ServiceBinding.expert_config_id == expert_id)
+        .all()
+    )
+    existing_ids = {b.service_id for b in existing}
+
+    for binding in existing:
+        if binding.service_id not in valid_ids:
+            db.delete(binding)
+
+    for sid in desired:
+        if sid in valid_ids and sid not in existing_ids:
+            db.add(ServiceBinding(expert_config_id=expert_id, service_id=sid, enabled=True))
+
+    db.commit()
+
+    bindings = (
+        db.query(ServiceBinding)
+        .filter(ServiceBinding.expert_config_id == expert_id)
+        .order_by(ServiceBinding.id.asc())
+        .all()
+    )
+    services = [_serialize_service_binding(binding) for binding in bindings]
+    return {"expert_id": expert_id, "services": services, "count": len(services)}
+
+
 @router.get("/{expert_id}/sub-experts")
 async def list_sub_experts(
     expert_id: int,
@@ -556,10 +740,109 @@ async def unbind_sub_expert(
     return {"success": True, "expert_id": expert_id, "sub_expert_id": sub_id}
 
 
+class BatchSubExpertsRequest(BaseModel):
+    sub_expert_ids: List[int] = Field(default_factory=list)
+
+
+@router.put("/{expert_id}/sub-experts/batch")
+async def batch_set_expert_sub_experts(
+    expert_id: int,
+    request: BatchSubExpertsRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """Replace the expert's sub-expert bindings with exactly ``sub_expert_ids``.
+
+    Mirrors the services batch-set so the WebUI Expert form persists the whole
+    sub-expert checkbox selection in one call (EXPWEB-026).
+    """
+    from src.database.models import ExpertConfig
+
+    manager = ExpertManager(db)
+    if not manager.get_expert(expert_id=expert_id):
+        raise HTTPException(status_code=404, detail="Expert configuration not found")
+
+    desired = [sid for sid in dict.fromkeys(request.sub_expert_ids) if sid != expert_id]
+    valid_ids = {
+        row.id
+        for row in db.query(ExpertConfig.id).filter(ExpertConfig.id.in_(desired)).all()
+    } if desired else set()
+
+    existing = (
+        db.query(SubExpertBinding)
+        .filter(SubExpertBinding.parent_expert_id == expert_id)
+        .all()
+    )
+    existing_ids = {b.child_expert_id for b in existing}
+
+    for binding in existing:
+        if binding.child_expert_id not in valid_ids:
+            db.delete(binding)
+
+    for sid in desired:
+        if sid in valid_ids and sid not in existing_ids:
+            db.add(SubExpertBinding(parent_expert_id=expert_id, child_expert_id=sid))
+
+    db.commit()
+
+    bindings = (
+        db.query(SubExpertBinding)
+        .filter(SubExpertBinding.parent_expert_id == expert_id)
+        .order_by(SubExpertBinding.id.asc())
+        .all()
+    )
+    sub_experts = [_serialize_sub_expert_binding(binding) for binding in bindings]
+    return {"expert_id": expert_id, "sub_experts": sub_experts, "count": len(sub_experts)}
+
+
+async def _process_expert_execute_job(
+    job_id: int,
+    expert_id: int,
+    input_text: str,
+    parameters: Dict[str, Any],
+    context: Dict[str, Any],
+    auth_context: Dict[str, Any],
+) -> None:
+    """Background runner for an async expert execution (EXPWEB-029).
+
+    Uses its own DB session (background tasks outlive the request-scoped session),
+    runs the transactional executor, and records the result on the job so the WebUI
+    Test Query popup can poll GET /jobs/{id} for progress and the final response.
+    """
+    from src.core.job.manager import JobManager
+
+    db_gen = get_db()
+    db = next(db_gen)
+    job_manager = JobManager(db)
+    try:
+        job_manager.update_job(job_id=job_id, status="processing")
+        executor = TransactionalExecutor(db)
+        result = await executor.execute(
+            expert_id=expert_id,
+            input_text=input_text,
+            parameters=parameters,
+            context=context,
+            auth_context=auth_context,
+        )
+        job_manager.update_job(
+            job_id=job_id,
+            status="completed",
+            response_received=json.dumps(result) if not isinstance(result, str) else result,
+        )
+    except Exception as exc:  # pragma: no cover - execution failure surfaced on the job
+        job_manager.update_job(job_id=job_id, status="failed", error_info={"error": str(exc)})
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
 @router.post("/{expert_id}/execute")
 async def execute_expert(
     expert_id: int,
     request: ExecuteExpertRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_api_key),
 ) -> Dict[str, Any]:
@@ -567,15 +850,56 @@ async def execute_expert(
     if not manager.get_expert(expert_id=expert_id):
         raise HTTPException(status_code=404, detail="Expert configuration not found")
 
+    auth_context = {
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role,
+    }
+
+    # EXPWEB-029: resolve execution mode. Explicit async_mode / mode wins; otherwise a
+    # browser context (Test Query popup passes context.user_id) defaults to async so the
+    # WebUI can render job/progress. Pure-sync API callers keep the transactional result.
+    async_mode = request.async_mode
+    if request.mode is not None:
+        mode_lower = request.mode.lower().strip()
+        if mode_lower == "async":
+            async_mode = True
+        elif mode_lower in ("sync", "transactional"):
+            async_mode = False
+    if async_mode is None:
+        async_mode = bool(request.context and request.context.get("user_id") is not None)
+
+    if async_mode:
+        from src.core.job.manager import JobManager
+
+        job_manager = JobManager(db)
+        job = job_manager.create_job(
+            job_type="expert_execute",
+            user_id=current_user.id,
+            prompt_sent=request.input_text,
+            metadata={"expert_id": expert_id},
+        )
+        background_tasks.add_task(
+            _process_expert_execute_job,
+            job.id,
+            expert_id,
+            request.input_text,
+            request.parameters or {},
+            request.context or {},
+            auth_context,
+        )
+        return {
+            "mode": "async",
+            "job_id": job.id,
+            "status": "pending",
+            "message": "Job queued. Use GET /jobs/{job_id} to check status.",
+        }
+
     executor = TransactionalExecutor(db)
     return await executor.execute(
         expert_id=expert_id,
         input_text=request.input_text,
         parameters=request.parameters or {},
         context=request.context or {},
-        auth_context={
-            "user_id": current_user.id,
-            "username": current_user.username,
-            "role": current_user.role,
-        },
+        auth_context=auth_context,
     )

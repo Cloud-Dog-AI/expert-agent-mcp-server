@@ -30,6 +30,7 @@ Recent Changes:
 
 import asyncio
 import json
+import os
 import sys
 import time
 import uuid
@@ -39,6 +40,7 @@ from cloud_dog_api_kit.mcp import InMemoryAsyncJobStore, LegacySSEConfig, regist
 from cloud_dog_api_kit.mcp import transport as mcp_transport
 from cloud_dog_api_kit.middleware.timeout import TimeoutMiddleware
 from fastapi import Request
+from fastapi.responses import StreamingResponse
 
 from src.servers.base import BaseServer
 from src.config.loader import get_config
@@ -67,6 +69,7 @@ class MCPToolAuthMiddleware:
     """
 
     _OPEN_PATHS = {"/health", "/mcp/health", "/mcp/tools"}
+    _ADMIN_TOOL_PREFIXES = ("admin_",)
 
     def __init__(self, app):
         self.app = app
@@ -95,6 +98,11 @@ class MCPToolAuthMiddleware:
         if self._requires_auth(is_jsonrpc, body) and not self._authenticate(scope):
             return await self._send_401(send)
 
+        compat_response = self._jsonrpc_compat_response(body) if is_jsonrpc else None
+        if compat_response is not None:
+            status, payload = compat_response
+            return await self._send_json(send, status, payload)
+
         if method in ("POST", "PUT", "PATCH"):
             replayed = {"sent": False}
 
@@ -102,7 +110,7 @@ class MCPToolAuthMiddleware:
                 if not replayed["sent"]:
                     replayed["sent"] = True
                     return {"type": "http.request", "body": body, "more_body": False}
-                return {"type": "http.disconnect"}
+                return {"type": "http.request", "body": b"", "more_body": False}
 
             return await self.app(scope, _replay, send)
         return await self.app(scope, receive, send)
@@ -113,6 +121,41 @@ class MCPToolAuthMiddleware:
             return True
         # bespoke /mcp/<tool> dispatch route (already filtered to /mcp/* non-open)
         return True
+
+    @classmethod
+    def _jsonrpc_compat_response(cls, body: bytes) -> tuple[int, dict[str, Any]] | None:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except Exception:
+            return None
+        if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
+            return None
+        request_id = payload.get("id")
+        method = payload.get("method")
+        if method == "resources/list":
+            return 200, {"jsonrpc": "2.0", "id": request_id, "result": {"resources": []}}
+        if method == "tools/call":
+            params = payload.get("params") or {}
+            if not isinstance(params, dict):
+                return None
+            name = str(params.get("name") or "")
+            arguments = params.get("arguments") or {}
+            auth_context = arguments.get("auth_context") if isinstance(arguments, dict) else None
+            role = (
+                str((auth_context or {}).get("role") or "").strip().lower()
+                if isinstance(auth_context, dict)
+                else ""
+            )
+            if name.startswith(cls._ADMIN_TOOL_PREFIXES) and role and role != "admin":
+                return 403, {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32003,
+                        "message": "Forbidden: role is not authorised for admin MCP tool",
+                    },
+                }
+        return None
 
     @staticmethod
     def _authenticate(scope) -> bool:
@@ -146,6 +189,21 @@ class MCPToolAuthMiddleware:
         except Exception as exc:  # pragma: no cover - auth resolution must fail closed
             logger.warning("MCP auth resolution error (failing closed): %s", exc)
             return False
+
+    @staticmethod
+    async def _send_json(send, status: int, payload_obj: dict[str, Any]) -> None:
+        payload = json.dumps(payload_obj).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(payload)).encode("latin-1")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
 
     @staticmethod
     async def _send_401(send) -> None:
@@ -193,11 +251,9 @@ _TOOL_PERMISSION_MAP: Dict[str, str] = {
     "summarize_session": "expert:tool:execute",
     "get_summaries": "expert:tool:read",
     "execute_tool": "expert:tool:execute",
-    "run_research_cycle": "expert:tool:execute",
-    "run_research_document": "expert:tool:execute",
-    "get_research_document_status": "expert:tool:read",
     "list_services": "expert:tool:read",
     "invoke_service_tool": "expert:tool:execute",
+    "run_research_cycle": "expert:tool:execute",
     "code_execute": "expert:tool:execute",
     # Admin tools — admin role only
     "admin_list_experts": "expert:admin:*",
@@ -234,6 +290,12 @@ class MCPServer(BaseServer):
         # Keep stdio JSON-RPC state local to the stdio transport helper.
         self._rpc_sessions: Dict[str, Dict[str, Any]] = {}
         self._async_jobs: Dict[str, Dict[str, Any]] = {}
+        # Strong references to in-flight async-job tasks. asyncio only keeps WEAK
+        # references to tasks created with create_task; without holding a strong
+        # reference here a long-running job (e.g. a multi-section document that
+        # takes many minutes) can be garbage-collected mid-execution and silently
+        # never complete/deliver. Hold until done, then discard.
+        self._async_job_tasks: set = set()
         self._register_routes()
         self._register_platform_transport()
         self._register_mcp_contract()
@@ -308,21 +370,22 @@ class MCPServer(BaseServer):
             },
             {"name": "summarize_session", "description": "Trigger session summarization (AT1.11)"},
             {"name": "get_summaries", "description": "Get all summaries for a session (AT1.11)"},
-            {"name": "execute_tool", "description": "Transactional expert execution"},
-            {"name": "run_research_cycle",
-             "description": "Web-grounded, self-pruning daily research loop for a topic "
-                            "(search->crawl->ingest->rank->prune->grounded brief->deliver)"},
-            {"name": "run_research_document",
-             "description": "Layered scheduled validated demo: deterministic per-day target -> "
-                            "web-research source pool -> full-depth W28M-1604 grounded report "
-                            "(>=0.9x depth, tables, [S] citations, 26->27 correction) -> Drive+notify+git "
-                            "(async by default; returns run_id)"},
-            {"name": "get_research_document_status",
-             "description": "Poll the status/result of an async run_research_document run by run_id"},
+            {"name": "execute_tool",
+             "description": "Transactional expert execution. Optional DATA parameter "
+                            "parameters.agent_strategy (PS-96 §3): simple (default) | react | rlm | "
+                            "reflexion. Non-simple strategies run the cloud_dog_agent loop, driven by "
+                            "the expert's prompt and its bound tools / sub-experts."},
             {"name": "list_services", "description": "List bound services for an expert"},
             {
                 "name": "invoke_service_tool",
                 "description": "Invoke a tool on a bound external service",
+            },
+            {
+                "name": "run_research_cycle",
+                "description": (
+                    "Consume search-mcp research_stream SSE, relay progress events, "
+                    "and enrich image URL/file-mcp refs with caption/chart extraction."
+                ),
             },
             {
                 "name": "code_execute",
@@ -648,30 +711,6 @@ class MCPServer(BaseServer):
                 context=args.get("context"),
                 auth_context=args.get("auth_context"),
             )
-        if tool_name == "run_research_cycle":
-            from src.core.agentic.research_cycle import run_research_cycle
-            return await run_research_cycle(
-                topic=args.get("topic"),
-                deliver=bool(args.get("deliver", True)),
-                dry_run=bool(args.get("dry_run", False)),
-                actor=args.get("actor") or "research-loop",
-                slack_endpoint=args.get("slack_endpoint"),
-            )
-        if tool_name == "run_research_document":
-            from src.core.agentic.research_document import run_research_document
-            return await run_research_document(
-                topic=args.get("topic"),
-                target=args.get("target"),
-                deliver=bool(args.get("deliver", True)),
-                async_mode=bool(args.get("async_mode", True)),
-                slack_endpoint=args.get("slack_endpoint"),
-                date_str=args.get("date_str"),
-                refresh_sources=bool(args.get("refresh_sources", True)),
-                actor=args.get("actor") or "research-document",
-            )
-        if tool_name == "get_research_document_status":
-            from src.core.agentic.research_document import get_run_status
-            return get_run_status(args.get("run_id"))
         if tool_name == "list_services":
             return await self.tools.list_services_tool(args.get("expert_id"))
         if tool_name == "invoke_service_tool":
@@ -681,6 +720,16 @@ class MCPServer(BaseServer):
                 arguments=args.get("arguments"),
                 auth_context=args.get("auth_context"),
                 session_id=args.get("session_id"),
+            )
+        if tool_name == "run_research_cycle":
+            return await self.tools.run_research_cycle_tool(
+                query=args.get("query"),
+                depth=args.get("depth"),
+                tenant_id=args.get("tenant_id"),
+                correlation_id=args.get("correlation_id"),
+                budget=args.get("budget"),
+                image_refs=args.get("image_refs") or args.get("images") or [],
+                auth_context=args.get("auth_context"),
             )
         if tool_name == "code_execute":
             return await self.tools.code_execute_tool(
@@ -735,6 +784,9 @@ class MCPServer(BaseServer):
                 )
             return self._jsonrpc_result(request_id, {"tools": tools})
 
+        if method == "resources/list":
+            return self._jsonrpc_result(request_id, {"resources": []})
+
         if method == "tools/call":
             name = params.get("name")
             arguments = params.get("arguments") or {}
@@ -749,6 +801,11 @@ class MCPServer(BaseServer):
 
                 async def _resolve_job():
                     try:
+                        # NOTE: an in-process concurrency semaphore around this call was
+                        # tried (W28M-1633) to bound bursts, but it regressed report
+                        # delivery (documents completed text but their render/deliver step
+                        # never fired), so it was reverted. Downstream-overload protection
+                        # is handled by the sql-agent query-result cache instead.
                         tool_result = await self._run_tool_call(name, arguments)
                         if isinstance(tool_result, dict) and tool_result.get("error"):
                             self._async_jobs[job_id] = {
@@ -772,7 +829,11 @@ class MCPServer(BaseServer):
                             "result": None,
                         }
 
-                asyncio.create_task(_resolve_job())
+                # Hold a strong reference so the event loop cannot GC a long-running
+                # job mid-execution (see self._async_job_tasks). Discard on completion.
+                task = asyncio.create_task(_resolve_job())
+                self._async_job_tasks.add(task)
+                task.add_done_callback(self._async_job_tasks.discard)
                 return self._jsonrpc_result(request_id, {"job_id": job_id, "guid": guid})
 
             tool_result = await self._run_tool_call(name, arguments)
@@ -891,6 +952,84 @@ class MCPServer(BaseServer):
                 collection=data.get("collection"),
                 vector_store_name=data.get("vector_store_name") or data.get("store_name") or data.get("store_id") or "_DEFAULT_",
                 metadatas=data.get("metadatas"),
+            )
+
+        @self.app.get("/mcp/research/stream")
+        async def mcp_research_stream(request: Request):
+            """Relay search-mcp research_stream SSE to MCP/chat clients."""
+            from src.core.agentic.research_cycle import ResearchCycleManager, sse_frame
+
+            query = request.query_params.get("query")
+            depth = request.query_params.get("depth")
+            tenant_id = request.query_params.get("tenant_id") or "default"
+            correlation_id = request.query_params.get("correlation_id") or str(uuid.uuid4())
+            max_results_raw = request.query_params.get("max_results")
+            max_results = None
+            if max_results_raw:
+                try:
+                    max_results = int(max_results_raw)
+                except ValueError:
+                    max_results = None
+            last_raw = (
+                request.headers.get("Last-Event-ID")
+                or request.query_params.get("last_event_id")
+                or request.query_params.get("after_id")
+            )
+            last_event_id = None
+            if last_raw:
+                try:
+                    last_event_id = int(last_raw)
+                except ValueError:
+                    last_event_id = None
+
+            def _values(name: str) -> List[str]:
+                values = request.query_params.getlist(name)
+                if not values:
+                    return []
+                expanded: List[str] = []
+                for value in values:
+                    expanded.extend(
+                        [part.strip() for part in str(value).split(",") if part.strip()]
+                    )
+                return expanded
+
+            async def _event_stream():
+                with self.tools._db_scope() as db:
+                    manager = ResearchCycleManager(db)
+                    try:
+                        async for event in manager.stream_research(
+                            query or "",
+                            depth=depth,
+                            tenant_id=tenant_id,
+                            correlation_id=correlation_id,
+                            max_results=max_results,
+                            query_languages=_values("query_languages") or _values("languages"),
+                            target_languages=_values("target_languages"),
+                            synthesise_in=(
+                                request.query_params.get("synthesise_in")
+                                or request.query_params.get("synthesize_in")
+                            ),
+                            auth_context={
+                                "correlation_id": correlation_id,
+                                "x_api_key": request.headers.get("x-api-key"),
+                            },
+                            last_event_id=last_event_id,
+                        ):
+                            yield sse_frame(event).encode("utf-8")
+                    except Exception as exc:
+                        error_event = {
+                            "id": last_event_id or 0,
+                            "type": "error",
+                            "correlation_id": correlation_id,
+                            "tenant_id": tenant_id,
+                            "error": str(exc),
+                        }
+                        yield sse_frame(error_event).encode("utf-8")
+
+            return StreamingResponse(
+                _event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Correlation-ID": correlation_id},
             )
 
         @self.app.get("/mcp/health")

@@ -149,6 +149,11 @@ class ChannelManager:
         expert_config_id: Optional[int] = None,
         description: Optional[str] = None,
         enabled: Optional[bool] = None,
+        context_type: Optional[str] = None,
+        expected_outcomes: Optional[str] = None,
+        history_scope: Optional[str] = None,
+        history_limitation: Optional[Dict[str, Any]] = None,
+        rerank_model: Optional[str] = None,
     ) -> Channel:
         """Update an existing channel."""
         db = self._get_db()
@@ -177,6 +182,24 @@ class ChannelManager:
 
             if enabled is not None:
                 channel.enabled = enabled
+
+            # PS-76 channel config surface — persist the same optional fields
+            # create_channel already stores so the WebUI round-trips them via
+            # GET /channels/{id}/config (EXPERT-SNAG-003).
+            if context_type is not None:
+                channel.context_type = context_type
+
+            if expected_outcomes is not None:
+                channel.expected_outcomes = expected_outcomes
+
+            if history_scope is not None:
+                channel.history_scope = history_scope
+
+            if history_limitation is not None:
+                channel.history_limitation_json = json.dumps(history_limitation)
+
+            if rerank_model is not None:
+                channel.rerank_model = rerank_model
 
             db.add(channel)
             db.commit()

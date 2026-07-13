@@ -37,6 +37,7 @@ import asyncio
 import json
 import hashlib
 import hmac
+from datetime import datetime, timezone
 from cloud_dog_llm.domain.errors import InvalidRequestError, ProviderUnavailableError
 
 from src.database.connection import get_db
@@ -45,7 +46,7 @@ from src.core.channel.manager import ChannelManager
 from src.core.llm.manager import LLMManager
 from src.core.session.manager import SessionManager
 from src.core.job.manager import JobManager
-from src.database.models import ExpertConfig, User
+from src.database.models import Channel, ExpertConfig, User
 from src.utils.logger import get_logger
 from src.config.loader import get_config
 from src.core.cache_integration import (
@@ -678,6 +679,37 @@ class UpdateChannelRequest(BaseModel):
     expert_config_id: Optional[int] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+    context_type: Optional[str] = None
+    expected_outcomes: Optional[str] = None
+    history_scope: Optional[str] = None
+    history_limitation: Optional[Dict[str, Any]] = None
+    rerank_model: Optional[str] = None
+
+
+def _serialize_channel(channel: Channel) -> Dict[str, Any]:
+    """Return the complete persisted channel contract for CRUD responses."""
+    history_limitation: Optional[Dict[str, Any]] = None
+    raw_history_limitation = getattr(channel, "history_limitation_json", None)
+    if raw_history_limitation:
+        try:
+            history_limitation = json.loads(raw_history_limitation)
+        except (TypeError, ValueError):
+            history_limitation = None
+
+    return {
+        "id": channel.id,
+        "name": channel.name,
+        "expert_config_id": channel.expert_config_id,
+        "enabled": channel.enabled,
+        "description": channel.description,
+        "context_type": channel.context_type,
+        "expected_outcomes": channel.expected_outcomes,
+        "history_scope": channel.history_scope,
+        "history_limitation": history_limitation,
+        "rerank_model": channel.rerank_model,
+        "created_at": channel.created_at.isoformat() if channel.created_at else None,
+        "updated_at": channel.updated_at.isoformat() if channel.updated_at else None,
+    }
 
 
 @router.post("")
@@ -722,15 +754,7 @@ async def create_channel(
             )
         except Exception:
             pass
-        return {
-            "id": channel.id,
-            "name": channel.name,
-            "expert_config_id": channel.expert_config_id,
-            "enabled": channel.enabled,
-            "description": channel.description,
-            "created_at": channel.created_at.isoformat() if channel.created_at else None,
-            "updated_at": channel.updated_at.isoformat() if channel.updated_at else None,
-        }
+        return _serialize_channel(channel)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -750,16 +774,13 @@ async def update_channel(
             expert_config_id=request.expert_config_id,
             description=request.description,
             enabled=request.enabled,
+            context_type=request.context_type,
+            expected_outcomes=request.expected_outcomes,
+            history_scope=request.history_scope,
+            history_limitation=request.history_limitation,
+            rerank_model=request.rerank_model,
         )
-        return {
-            "id": channel.id,
-            "name": channel.name,
-            "expert_config_id": channel.expert_config_id,
-            "enabled": channel.enabled,
-            "description": channel.description,
-            "created_at": channel.created_at.isoformat() if channel.created_at else None,
-            "updated_at": channel.updated_at.isoformat() if channel.updated_at else None,
-        }
+        return _serialize_channel(channel)
     except ValueError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
@@ -774,18 +795,7 @@ async def list_channels(
     manager = ChannelManager(db)
     channels = manager.list_channels(enabled_only=enabled_only)
     return {
-        "channels": [
-            {
-                "id": c.id,
-                "name": c.name,
-                "expert_config_id": c.expert_config_id,
-                "enabled": c.enabled,
-                "description": c.description,
-                "created_at": c.created_at.isoformat() if c.created_at else None,
-                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-            }
-            for c in channels
-        ],
+        "channels": [_serialize_channel(channel) for channel in channels],
         "count": len(channels),
     }
 
@@ -797,14 +807,109 @@ async def get_channel(channel_id: int, db: Session = Depends(get_db)) -> Dict[st
     channel = manager.get_channel(channel_id=channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+    return _serialize_channel(channel)
+
+
+def _channel_access_control(channel: Channel) -> Dict[str, Any]:
+    """Deserialise the channel access-control payload (users/groups/roles)."""
+    raw = getattr(channel, "access_control_json", None)
+    if not raw:
+        return {"users": [], "groups": [], "roles": []}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {"users": [], "groups": [], "roles": []}
     return {
-        "id": channel.id,
-        "name": channel.name,
-        "expert_config_id": channel.expert_config_id,
-        "description": channel.description,
-        "enabled": channel.enabled,
-        "created_at": channel.created_at.isoformat() if channel.created_at else None,
-        "updated_at": channel.updated_at.isoformat() if channel.updated_at else None,
+        "users": parsed.get("users") or [],
+        "groups": parsed.get("groups") or [],
+        "roles": parsed.get("roles") or [],
+    }
+
+
+class ChannelPermissionsRequest(BaseModel):
+    """Access-control payload for a channel (EXPERT-SNAG-003 / EXPWEB channel perms)."""
+
+    users: Optional[List[Any]] = None
+    groups: Optional[List[Any]] = None
+    roles: Optional[List[Any]] = None
+
+
+@router.get("/{channel_id}/permissions")
+async def get_channel_permissions(channel_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Return the channel's access-control lists (users, groups, roles)."""
+    manager = ChannelManager(db)
+    channel = manager.get_channel(channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return _channel_access_control(channel)
+
+
+@router.put("/{channel_id}/permissions")
+async def update_channel_permissions(
+    channel_id: int,
+    request: ChannelPermissionsRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """Persist the channel's access-control lists (users, groups, roles)."""
+    manager = ChannelManager(db)
+    channel = manager.get_channel(channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    existing = _channel_access_control(channel)
+    payload = {
+        "users": request.users if request.users is not None else existing["users"],
+        "groups": request.groups if request.groups is not None else existing["groups"],
+        "roles": request.roles if request.roles is not None else existing["roles"],
+    }
+    channel.access_control_json = json.dumps(payload)
+    db.add(channel)
+    db.commit()
+    db.refresh(channel)
+    try:
+        log_audit_event(
+            "channel.permissions.updated",
+            ref=str(channel_id),
+            actor=getattr(user, "username", None),
+            data={"users": len(payload["users"]), "groups": len(payload["groups"]), "roles": len(payload["roles"])},
+        )
+    except Exception:  # pragma: no cover - audit best-effort
+        pass
+    return _channel_access_control(channel)
+
+
+@router.get("/{channel_id}/config")
+async def get_channel_config(channel_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Return the channel's configuration surface (context/outcomes/history/rerank + access)."""
+    manager = ChannelManager(db)
+    channel = manager.get_channel(channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    history_limitation: Optional[Dict[str, Any]] = None
+    raw_hl = getattr(channel, "history_limitation_json", None)
+    if raw_hl:
+        try:
+            history_limitation = json.loads(raw_hl)
+        except (TypeError, ValueError):
+            history_limitation = None
+    llm_config: Dict[str, Any] = {}
+    try:
+        llm_config = manager.get_channel_llm_config(channel_id) or {}
+    except Exception:  # pragma: no cover - llm config is best-effort here
+        llm_config = {}
+    return {
+        "channel_id": channel.id,
+        "context_type": channel.context_type,
+        "expected_outcomes": channel.expected_outcomes,
+        "history_scope": channel.history_scope,
+        "history_limitation": history_limitation,
+        "rerank_model": channel.rerank_model,
+        "access_control": _channel_access_control(channel),
+        "llm_provider": llm_config.get("provider") or llm_config.get("llm_provider"),
+        "llm_model": llm_config.get("model") or llm_config.get("llm_model"),
+        "temperature": llm_config.get("temperature"),
+        "max_tokens": llm_config.get("max_tokens"),
     }
 
 
@@ -892,13 +997,38 @@ async def channel_chat(
             async_mode = False
 
     if async_mode:
-        # Async mode: Create job and return job ID
+        # Async mode: Create job and return job ID.
+        # Resolve (or create) the conversation session up front so the response
+        # can surface a concrete session_id — the WebUI chat flow and its
+        # evidence proofs rely on the async response carrying both session_id
+        # and job_id. The background job then reuses this same session_id.
+        session_manager = SessionManager(db)
+        if request.session_id:
+            session = session_manager.get_session(request.session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+        else:
+            try:
+                session_result = session_manager.create_session(
+                    user_id=user_id, expert_config_id=expert.id, check_limits=False
+                )
+            except PermissionError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            session, notification = session_result
+            if not session:
+                raise HTTPException(
+                    status_code=503, detail=f"Failed to create session: {notification}"
+                )
+        session_id = session.id
+
         job_manager = JobManager(db)
 
         # Create job
         job = job_manager.create_job(
             job_type="channel_chat",
-            session_id=request.session_id,
+            session_id=session_id,
             channel_id=channel_id,
             user_id=user_id,
             prompt_sent=request.message,
@@ -911,7 +1041,7 @@ async def channel_chat(
             channel_id,
             user_id,
             request.message,
-            request.session_id,
+            session_id,
             request.metadata or {},
             request.temperature,
             request.top_k,
@@ -926,6 +1056,7 @@ async def channel_chat(
         return {
             "mode": "async",
             "job_id": job.id,
+            "session_id": session_id,
             "status": "pending",
             "message": "Job queued. Use GET /jobs/{job_id} to check status.",
         }
@@ -1281,6 +1412,70 @@ async def get_channel_history(
     except Exception as e:
         logger.error(f"Failed to get channel history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get channel history: {str(e)}")
+
+
+@router.get("/{channel_id}/history/export")
+async def export_channel_history(
+    channel_id: int,
+    format: str = "json",
+    scope: str = "channel",
+    user_id: Optional[int] = None,
+    session_id: Optional[int] = None,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Export a channel's conversation history as a downloadable JSON payload.
+
+    Reuses the same scoped history retrieval as ``GET /{channel_id}/history`` and
+    wraps it with export metadata (``exported_count``, ``format``, ``exported_at``)
+    so the WebUI "Export JSON" action can surface an ``exported_count`` and a
+    self-describing document.
+    """
+    if format not in ("json",):
+        raise HTTPException(status_code=400, detail="Unsupported export format. Only 'json' is supported.")
+    if scope not in ("channel", "user", "session"):
+        raise HTTPException(
+            status_code=400, detail="Invalid scope. Must be 'channel', 'user', or 'session'"
+        )
+    if scope == "user" and not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required for user scope")
+    if scope == "session" and not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required for session scope")
+
+    manager = ChannelManager(db)
+    channel = manager.get_channel(channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail=f"Channel {channel_id} not found")
+
+    try:
+        history = manager.get_channel_history(
+            channel_id=channel_id,
+            scope=scope,
+            user_id=user_id,
+            session_id=session_id,
+            limit=limit,
+            offset=0,
+        )
+    except Exception as e:
+        logger.error(f"Failed to export channel history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to export channel history: {str(e)}")
+
+    messages = history.get("messages", []) if isinstance(history, dict) else []
+    channel_name = getattr(channel, "name", None)
+    if channel_name is None and isinstance(channel, dict):
+        channel_name = channel.get("name")
+
+    return {
+        "format": format,
+        "scope": scope,
+        "channel_id": channel_id,
+        "channel_name": channel_name,
+        "user_id": user_id,
+        "session_id": session_id,
+        "exported_count": len(messages),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "messages": messages,
+    }
 
 
 class AddVectorStoreRequest(BaseModel):
