@@ -351,15 +351,25 @@ class APIServer(BaseServer):
             seeds = (
                 (
                     str(get_config("web_server.read_write_username") or "read-write").strip(),
-                    # Demo password meets the complexity policy (upper+lower+digit+special);
-                    # overridable via web_server.read_write_password / the env key.
-                    str(get_config("web_server.read_write_password") or "BlueRiverChair1!"),
+                    # Falls back to the resolved admin password (web_server.password,
+                    # else test.user.password) when unset; no committed literal (W28A-SEC-R17).
+                    str(
+                        get_config("web_server.read_write_password")
+                        or get_config("web_server.password")
+                        or get_config("test.user.password")
+                        or ""
+                    ),
                     "read-write@expert.local",
                     "user",
                 ),
                 (
                     str(get_config("web_server.read_only_username") or "read-only").strip(),
-                    str(get_config("web_server.read_only_password") or "GreenRiverDesk2!"),
+                    str(
+                        get_config("web_server.read_only_password")
+                        or get_config("web_server.password")
+                        or get_config("test.user.password")
+                        or ""
+                    ),
                     "read-only@expert.local",
                     "viewer",
                 ),

@@ -118,7 +118,7 @@ service_composition:
 # as service_credentials.<external_service_name>.api_key when the ExternalService
 # row carries no literal value. Real values are injected via
 # CLOUD_DOG__EXPERT__SERVICE_CREDENTIALS__<NAME>__API_KEY env vars bound to
-# ${vault.dev.services.<svc>.api_key} expressions — secrets stay in Vault, never
+# a platform secret-store reference — secrets stay in the secret store, never
 # in defaults.yaml or the external_services table.
 service_credentials: {}
 

@@ -154,9 +154,9 @@ class ServiceCompositionManager:
         Precedence:
           1. an explicit literal ``value`` on the service's auth_config (legacy);
           2. a ``config_key`` on the auth_config, resolved via cloud_dog_config
-             (so the value can be a ``${vault.dev.services.<svc>.api_key}`` expression);
+             (so the value can be a platform secret-store reference expression);
           3. the per-service convention key ``service_credentials.<service_name>.api_key``
-             (the deployment env maps these to ``${vault.dev.services.<svc>.api_key}``).
+             (the deployment env maps these to a platform secret-store reference).
         This keeps the api_key in Vault (resolved at runtime) rather than in the
         expert_configs / external_services tables (RULES §2.3, §1.4).
         """
