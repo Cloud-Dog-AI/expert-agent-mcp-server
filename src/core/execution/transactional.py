@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from src.common.reasoning_boundary import clean_final_content
 from src.config.loader import get_config
 from src.core.audit.context import get_current_principal_id
 from src.core.expert.access_control import is_authorized
@@ -31,10 +33,7 @@ def _strip_think(text: Any) -> str:
     """Remove qwen3-style ``<think>...</think>`` chain-of-thought blocks from model
     output (and a leading unmatched ``<think>`` when the budget truncated the close
     tag), so reasoning never leaks into documents, JSON envelopes or deliveries."""
-    s = str(text or "")
-    s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
-    s = re.sub(r"<think>.*$", "", s, flags=re.DOTALL)  # truncated/unclosed think block
-    return s.strip()
+    return clean_final_content(text)
 
 
 class TransactionalExecutor:
@@ -807,17 +806,31 @@ class TransactionalExecutor:
         if is_agent_run:
             from src.core.execution.strategy import run_agent_strategy
 
-            response = await run_agent_strategy(
-                strategy=agent_strategy,
-                db=self._get_db(),
-                executor=self,
-                expert=expert,
-                system_prompt=prompt,
-                input_text=input_text,
-                params=params,
-                auth_context=auth_context,
-                llm_cfg=self._llm_cfg,
+            max_wall_seconds = self._coerce_int(
+                params.get("max_wall_time_seconds"),
+                self._coerce_int(get_config("agent.max_wall_time_seconds"), 600),
             )
+            if max_wall_seconds <= 0:
+                raise ValueError("max_wall_time_seconds must be positive")
+            try:
+                response = await asyncio.wait_for(
+                    run_agent_strategy(
+                        strategy=agent_strategy,
+                        db=self._get_db(),
+                        executor=self,
+                        expert=expert,
+                        system_prompt=prompt,
+                        input_text=input_text,
+                        params=params,
+                        auth_context=auth_context,
+                        llm_cfg=self._llm_cfg,
+                    ),
+                    timeout=max_wall_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Agent strategy exceeded governed wall time of {max_wall_seconds} seconds"
+                ) from exc
         else:
             response = await self.llm_manager.generate(
                 messages=messages,

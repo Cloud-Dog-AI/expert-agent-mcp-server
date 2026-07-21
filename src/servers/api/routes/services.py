@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.core.audit.logger import log_audit_event
+from src.core.security.redaction import merge_write_only_values, redact_sensitive_values
 from src.core.service.manager import ServiceManager
 from src.database.connection import get_db
 from src.database.models import ExternalService, User
@@ -93,6 +94,8 @@ def _serialize_service(service: ExternalService) -> Dict[str, Any]:
                 "timeout_seconds": binding.timeout_seconds,
             }
         )
+    auth_config = json.loads(service.auth_config_json) if service.auth_config_json else {}
+    metadata = json.loads(service.metadata_json) if service.metadata_json else {}
     return {
         "id": service.id,
         "name": service.name,
@@ -100,8 +103,8 @@ def _serialize_service(service: ExternalService) -> Dict[str, Any]:
         "endpoint_url": service.endpoint_url,
         "health_status": service.health_status,
         "expert_bindings": expert_bindings,
-        "auth_config": json.loads(service.auth_config_json) if service.auth_config_json else {},
-        "metadata": json.loads(service.metadata_json) if service.metadata_json else {},
+        "auth_config": redact_sensitive_values(auth_config, extra_sensitive_keys={"value"}),
+        "metadata": redact_sensitive_values(metadata),
         "usage_statistics": json.loads(service.usage_statistics_json)
         if service.usage_statistics_json
         else {},
@@ -123,8 +126,10 @@ async def create_service(
             name=request.name,
             service_type=request.service_type,
             endpoint_url=request.endpoint_url,
-            auth_config=request.auth_config,
-            metadata=request.metadata,
+            auth_config=merge_write_only_values(
+                {}, request.auth_config, extra_sensitive_keys={"value"}
+            ),
+            metadata=merge_write_only_values({}, request.metadata),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -149,7 +154,6 @@ async def create_service(
 async def list_services(
     service_type: Optional[str] = None,
     db: Session = Depends(get_db),
-    _: User = Depends(verify_admin),
 ) -> Dict[str, Any]:
     manager = ServiceManager(db)
     services = manager.list_services(service_type=service_type)
@@ -201,7 +205,6 @@ async def test_service_endpoint(
 async def get_service(
     service_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(verify_admin),
 ) -> Dict[str, Any]:
     manager = ServiceManager(db)
     service = manager.get_service(service_id=service_id)
@@ -223,9 +226,19 @@ async def update_service(
     if request.endpoint_url is not None:
         service.endpoint_url = request.endpoint_url
     if request.auth_config is not None:
-        service.auth_config_json = json.dumps(request.auth_config)
+        existing_auth = json.loads(service.auth_config_json) if service.auth_config_json else {}
+        service.auth_config_json = json.dumps(
+            merge_write_only_values(
+                existing_auth,
+                request.auth_config,
+                extra_sensitive_keys={"value"},
+            )
+        )
     if request.metadata is not None:
-        service.metadata_json = json.dumps(request.metadata)
+        existing_metadata = json.loads(service.metadata_json) if service.metadata_json else {}
+        service.metadata_json = json.dumps(
+            merge_write_only_values(existing_metadata, request.metadata)
+        )
     db.commit()
     db.refresh(service)
     return _serialize_service(service)

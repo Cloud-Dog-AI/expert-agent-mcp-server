@@ -47,6 +47,21 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _channel_tool_name(tool: Any) -> str:
+    """Return the stable browser/API name for a stored expert tool entry."""
+    if isinstance(tool, str):
+        return tool
+    if isinstance(tool, dict):
+        for key in ("name", "tool"):
+            value = tool.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        if tool.get("sub_expert_id") is not None:
+            return f"sub-expert:{tool['sub_expert_id']}"
+        return json.dumps(tool, sort_keys=True, separators=(",", ":"))
+    return str(tool)
+
+
 class ChannelManager:
     """Manages channel-based experts."""
 
@@ -491,7 +506,7 @@ class ChannelManager:
             tools = json.loads(expert.tools_json)
             if not isinstance(tools, list):
                 return []
-            return [str(tool) for tool in tools]
+            return [_channel_tool_name(tool) for tool in tools]
         except Exception:
             return []
 
@@ -510,19 +525,21 @@ class ChannelManager:
         if not expert:
             return False
 
-        current_tools: List[str] = []
+        current_tools: List[Any] = []
         if expert.tools_json:
             try:
                 loaded = json.loads(expert.tools_json)
                 if isinstance(loaded, list):
-                    current_tools = [str(tool) for tool in loaded]
+                    current_tools = loaded
             except Exception:
                 current_tools = []
 
-        if tool_name not in current_tools:
+        if not any(_channel_tool_name(tool) == tool_name for tool in current_tools):
             return False
 
-        expert.tools_json = json.dumps([tool for tool in current_tools if tool != tool_name])
+        expert.tools_json = json.dumps(
+            [tool for tool in current_tools if _channel_tool_name(tool) != tool_name]
+        )
         db.commit()
         return True
 

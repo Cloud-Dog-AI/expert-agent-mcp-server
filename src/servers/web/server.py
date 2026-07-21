@@ -29,11 +29,13 @@ Recent Changes:
 """
 
 import asyncio
+from ipaddress import ip_address
 import json
 import secrets
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlunsplit
 
 from cloud_dog_api_kit import create_app
 from cloud_dog_api_kit.middleware.timeout import TimeoutMiddleware
@@ -48,7 +50,7 @@ from starlette.requests import ClientDisconnect
 
 from src.common.base_paths import join_route, normalise_base_path
 from src.config.loader import ConfigLoader, get_config, load_config
-from src.core.http import close_shared_async_clients
+from src.core.http import close_shared_async_clients, get_shared_async_client
 from src.servers.api.auth import job_permissions_for_role
 from src.core.auth.expert_flat_roles import (
     READ_ONLY_ROLE,
@@ -320,7 +322,9 @@ class WebServer(BaseServer):
         super().__init__("Web Server", "web_server")
         self._web_base_path = normalise_base_path(get_config("web_server.base_path"), default="")
         self._mcp_base_path = normalise_base_path(get_config("mcp_server.base_path"), default="/mcp")
+        self._web_mcp_path = join_route(self._web_base_path, "/web/mcp")
         self._a2a_base_path = normalise_base_path(get_config("a2a_server.base_path"), default="/a2a")
+        self._web_a2a_path = join_route(self._web_base_path, "/web/a2a")
         self.app = self._create_platform_app()
         self._server = None
         self._server_task: Optional[asyncio.Task] = None
@@ -367,6 +371,11 @@ class WebServer(BaseServer):
             "version": "0.1.0",
             "description": "Web UI for Expert Agent MCP Server",
             "cors_origins": ["*"],
+            # The Web tier owns a richer, stable probe payload contract below.
+            # Disable API-kit defaults at creation time: current FastAPI keeps
+            # included routers as dynamic _IncludedRouter entries, so deleting
+            # materialised routes after include_router() no longer removes them.
+            "enable_health": False,
         }
         try:
             return create_app(
@@ -687,8 +696,8 @@ class WebServer(BaseServer):
             "ENV": self._normalise_runtime_env(),
             "API_BASE_URL": origin,
             "WEB_API_BASE_URL": join_route(self._web_base_path, "/web/api"),
-            "MCP_BASE_URL": f"{origin}{self._mcp_base_path}",
-            "A2A_BASE_URL": f"{origin}{self._a2a_base_path}",
+            "MCP_BASE_URL": f"{origin}{self._web_mcp_path}",
+            "A2A_BASE_URL": f"{origin}{self._web_a2a_path}",
             "AUTH_MODE": "cookie",
         }
         if oidc_issuer:
@@ -797,8 +806,8 @@ class WebServer(BaseServer):
                 "const __origin = window.location.origin;",
                 f"window.__RUNTIME_CONFIG__ = {json.dumps(runtime)};",
                 'window.__RUNTIME_CONFIG__["API_BASE_URL"] = __origin;',
-                f'window.__RUNTIME_CONFIG__["MCP_BASE_URL"] = __origin + {json.dumps(self._mcp_base_path)};',
-                f'window.__RUNTIME_CONFIG__["A2A_BASE_URL"] = __origin + {json.dumps(self._a2a_base_path)};',
+                f'window.__RUNTIME_CONFIG__["MCP_BASE_URL"] = __origin + {json.dumps(self._web_mcp_path)};',
+                f'window.__RUNTIME_CONFIG__["A2A_BASE_URL"] = __origin + {json.dumps(self._web_a2a_path)};',
                 "",
             ])
             return Response(
@@ -864,6 +873,197 @@ class WebServer(BaseServer):
                 "user": self._serialise_session_user(state) if state else None,
             }
         add_web_route("/web/auth/status", web_auth_status)
+
+        async def web_mcp_proxy(request: Request) -> Response:
+            """Forward browser MCP JSON-RPC with the session-bound user JWT.
+
+            This is the MCP counterpart to ``/web/api``: the HttpOnly browser
+            cookie is resolved at the Web tier and only its user JWT is sent to
+            the internal MCP listener. Service/admin keys are never exposed to
+            or injected for the browser.
+            """
+            state = self._get_web_session_state(request)
+            token = state.get("auth_token") if state else None
+            if not token:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32001, "message": "Not authenticated"},
+                    },
+                )
+
+            body = await request.body()
+            loopback_host = str(ip_address(0x7F000001))
+            mcp_host = str(get_config("mcp_server.host") or loopback_host).strip()
+            if mcp_host in {"", "0.0.0.0", "::"}:
+                mcp_host = loopback_host
+            mcp_port = int(get_config("mcp_server.port") or 8081)
+            internal_url = urlunsplit(
+                ("http", f"{mcp_host}:{mcp_port}", self._mcp_base_path, "", "")
+            )
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": request.headers.get("content-type", "application/json"),
+            }
+            client = get_shared_async_client(timeout=300.0, verify=True)
+            try:
+                upstream = await client.request(
+                    request.method,
+                    internal_url,
+                    params=dict(request.query_params),
+                    headers=headers,
+                    content=body,
+                )
+            except Exception as exc:
+                logger.error("Web MCP proxy request failed: %s", exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32002, "message": "MCP backend unavailable"},
+                    },
+                )
+            response_headers = {
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower() in {
+                    "content-type",
+                    "cache-control",
+                    "x-correlation-id",
+                    "x-request-id",
+                    "mcp-session-id",
+                }
+            }
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=response_headers,
+            )
+
+        async def web_mcp_health_proxy(request: Request) -> Response:
+            """Expose the health endpoint for the browser MCP BFF base URL.
+
+            ``MCP_BASE_URL`` intentionally points at ``/web/mcp`` so browser
+            JSON-RPC calls use the session-bound user token above.  The shared
+            shell also probes ``<MCP_BASE_URL>/health``; proxy that request to
+            the real MCP listener instead of advertising a base URL whose
+            health contract returns 404.
+            """
+            loopback_host = str(ip_address(0x7F000001))
+            mcp_host = str(get_config("mcp_server.host") or loopback_host).strip()
+            if mcp_host in {"", "0.0.0.0", "::"}:
+                mcp_host = loopback_host
+            mcp_port = int(get_config("mcp_server.port") or 8081)
+            internal_url = urlunsplit(
+                ("http", f"{mcp_host}:{mcp_port}", f"{self._mcp_base_path}/health", "", "")
+            )
+            client = get_shared_async_client(timeout=30.0, verify=True)
+            try:
+                upstream = await client.request(
+                    "GET",
+                    internal_url,
+                    headers={"Accept": "application/json"},
+                )
+            except Exception as exc:
+                logger.error("Web MCP health proxy request failed: %s", exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={"status": "error", "detail": "MCP backend unavailable"},
+                )
+            response_headers = {
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower() in {
+                    "content-type",
+                    "cache-control",
+                    "x-correlation-id",
+                    "x-request-id",
+                }
+            }
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=response_headers,
+            )
+
+        add_web_route("/web/mcp", web_mcp_proxy, methods=["POST"])
+        add_web_route("/web/mcp/health", web_mcp_health_proxy)
+
+        async def web_a2a_proxy(path: str, request: Request) -> Response:
+            """Forward browser A2A requests to the internal listener.
+
+            Discovery and health remain readable before login so the shared
+            shell can report service state. Mutating broadcasts require a real
+            Web UI session and receive only that user's bearer token.
+            """
+            normalised_path = path.strip("/")
+            allowed_get_paths = {"health", "topics", ".well-known/agent.json"}
+            is_broadcast = normalised_path.startswith("broadcast/") and bool(
+                normalised_path.split("/", 1)[1]
+            )
+            if request.method.upper() == "GET":
+                if normalised_path not in allowed_get_paths:
+                    return JSONResponse(status_code=404, content={"detail": "A2A route not found"})
+            elif request.method.upper() == "POST":
+                if not is_broadcast:
+                    return JSONResponse(status_code=404, content={"detail": "A2A route not found"})
+            else:
+                return JSONResponse(status_code=405, content={"detail": "Method not allowed"})
+
+            state = self._get_web_session_state(request)
+            token = state.get("auth_token") if state else None
+            if request.method.upper() == "POST" and not token:
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+            loopback_host = str(ip_address(0x7F000001))
+            a2a_host = str(get_config("a2a_server.host") or loopback_host).strip()
+            if a2a_host in {"", "0.0.0.0", "::"}:
+                a2a_host = loopback_host
+            a2a_port = int(get_config("a2a_server.port") or 8082)
+            internal_path = join_route(self._a2a_base_path, f"/{normalised_path}")
+            internal_url = urlunsplit(("http", f"{a2a_host}:{a2a_port}", internal_path, "", ""))
+            headers = {
+                "Accept": request.headers.get("accept", "application/json"),
+                "Content-Type": request.headers.get("content-type", "application/json"),
+            }
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            client = get_shared_async_client(timeout=300.0, verify=True)
+            try:
+                upstream = await client.request(
+                    request.method,
+                    internal_url,
+                    params=dict(request.query_params),
+                    headers=headers,
+                    content=await request.body(),
+                )
+            except Exception as exc:
+                logger.error("Web A2A proxy request failed: %s", exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={"status": "error", "detail": "A2A backend unavailable"},
+                )
+            response_headers = {
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower()
+                in {
+                    "content-type",
+                    "cache-control",
+                    "x-correlation-id",
+                    "x-request-id",
+                }
+            }
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=response_headers,
+            )
+
+        add_web_route("/web/a2a/{path:path}", web_a2a_proxy, methods=["GET", "POST"])
 
         # Covers: FR1.43
         async def web_api_proxy(path: str, request: Request) -> Response:
@@ -931,21 +1131,41 @@ class WebServer(BaseServer):
                     json_body = body.decode("utf-8")
             try:
                 async with self._proxy_semaphore:
-                    response = await self._proxy.request(
-                        request.method,
-                        f"/{path}",
-                        params=dict(request.query_params),
-                        headers=forward_headers,
-                        json=json_body,
+                    # WebApiProxy always injects its configured service API key.
+                    # The API auth dependency intentionally prefers X-API-Key
+                    # over Authorization, which would turn every signed-in
+                    # browser into the service/admin principal and bypass
+                    # owner-scoped RBAC.  Browser traffic must carry only the
+                    # session user's bearer token, so call the same configured
+                    # upstream directly without service-key injection.
+                    client = get_shared_async_client(
+                        timeout=self._proxy._timeout,
+                        verify=self._proxy._verify_tls,
                     )
+                    request_kwargs: Dict[str, Any] = {
+                        "method": request.method,
+                        "url": f"{self._proxy._base_url}/{path}",
+                        "params": dict(request.query_params),
+                        "headers": forward_headers,
+                    }
+                    if body and isinstance(json_body, (dict, list)):
+                        request_kwargs["json"] = json_body
+                    elif body:
+                        request_kwargs["content"] = body
+                    response = await client.request(**request_kwargs)
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"API proxy error: {exc}")
 
             # Preserve content type and body for JSON and binary responses.
             return Response(
-                content=self._proxy_content(response.data),
+                content=response.content,
                 status_code=response.status_code,
-                media_type=response.headers.get("content-type"),
+                headers={
+                    "content-type": response.headers.get(
+                        "content-type",
+                        "application/octet-stream",
+                    )
+                },
             )
         add_web_route("/web/api/{path:path}", web_api_proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 

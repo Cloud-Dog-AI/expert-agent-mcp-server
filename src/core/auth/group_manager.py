@@ -60,7 +60,11 @@ class GroupManager:
         return next(db_gen)
 
     def create_group(
-        self, name: str, description: Optional[str] = None, enabled: bool = True
+        self,
+        name: str,
+        description: Optional[str] = None,
+        enabled: bool = True,
+        member_user_ids: Optional[List[int]] = None,
     ) -> Group:
         """
         Create a new group.
@@ -80,8 +84,21 @@ class GroupManager:
             if existing:
                 raise ValueError(f"Group '{name}' already exists")
 
+            requested_member_ids = list(dict.fromkeys(member_user_ids or []))
+            if requested_member_ids:
+                existing_user_ids = {
+                    row[0]
+                    for row in db.query(User.id).filter(User.id.in_(requested_member_ids)).all()
+                }
+                missing_user_ids = sorted(set(requested_member_ids) - existing_user_ids)
+                if missing_user_ids:
+                    raise ValueError(f"Unknown member user IDs: {missing_user_ids}")
+
             group = Group(name=name, description=description, enabled=enabled)
             db.add(group)
+            db.flush()
+            for user_id in requested_member_ids:
+                db.add(GroupMember(group_id=group.id, user_id=user_id, role="member"))
             db.commit()
             db.refresh(group)
 

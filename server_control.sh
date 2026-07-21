@@ -65,10 +65,10 @@ MAX_WAIT=${MAX_WAIT:-15}                 # Max wait for start/stop (seconds)
 SHUTDOWN_WAIT=${SHUTDOWN_WAIT:-10}       # Max wait for graceful shutdown (seconds)
 
 # Server-specific timeouts (API and MCP need more time for initialization)
-API_MAX_WAIT=30    # API server needs time for DB + initialization
-MCP_MAX_WAIT=30    # MCP server also needs initialization
-WEB_MAX_WAIT=15    # Web server starts quickly
-A2A_MAX_WAIT=15    # A2A server starts quickly
+API_MAX_WAIT=${API_MAX_WAIT:-120}  # API startup includes schema migration on cold storage
+MCP_MAX_WAIT=${MCP_MAX_WAIT:-30}   # MCP server also needs initialization
+WEB_MAX_WAIT=${WEB_MAX_WAIT:-15}   # Web server starts quickly
+A2A_MAX_WAIT=${A2A_MAX_WAIT:-15}   # A2A server starts quickly
 
 # Logging
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -81,9 +81,9 @@ select_python_bin() {
     for candidate in \
         "${CLOUD_DOG_SERVER_PYTHON:-}" \
         "${PYTHON_BIN:-}" \
-        "$SCRIPT_DIR/venv/bin/python" \
         "$SCRIPT_DIR/.venv/bin/python" \
-        "python3.12" \
+        "$SCRIPT_DIR/venv/bin/python" \
+        "python3.13" \
         "python3"; do
         [ -z "$candidate" ] && continue
         if [ ! -x "$candidate" ] && ! command -v "$candidate" >/dev/null 2>&1; then
@@ -91,6 +91,9 @@ select_python_bin() {
         fi
         if "$candidate" - <<'PY' >/dev/null 2>&1
 import importlib.util
+import sys
+if sys.version_info < (3, 13) or sys.version_info >= (3, 14):
+    raise SystemExit(1)
 required = [
     "cloud_dog_config",
     "cloud_dog_logging",
@@ -190,7 +193,7 @@ get_port_pid() {
 # Check if process is running
 is_running() {
     local pid=$1
-    [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1
+    [ -n "$pid" ] && kill -0 "$pid" > /dev/null 2>&1
 }
 
 # Check if a TCP port is listening (PID mapping may be unavailable in some envs)
@@ -233,25 +236,59 @@ check_server_http_health() {
 
 # Initialize server configuration from config files
 init_server_config() {
-    # API Server
-    API_HOST=$(read_config "API_SERVER__HOST" "127.0.0.1")
-    API_PORT=$(read_config "API_SERVER__PORT" "8083")
-    API_ENABLED=$(read_config "API_SERVER__ENABLED" "true")
-    
-    WEB_HOST=$(read_config "WEB_SERVER__HOST" "127.0.0.1")
-    # Web Server
-    WEB_PORT=$(read_config "WEB_SERVER__PORT" "8080")
-    WEB_ENABLED=$(read_config "WEB_SERVER__ENABLED" "true")
-    
-    MCP_HOST=$(read_config "MCP_SERVER__HOST" "127.0.0.1")
-    # MCP Server
-    MCP_PORT=$(read_config "MCP_SERVER__PORT" "8081")
-    MCP_ENABLED=$(read_config "MCP_SERVER__ENABLED" "true")
-    
-    A2A_HOST=$(read_config "A2A_SERVER__HOST" "127.0.0.1")
-    # A2A Server
-    A2A_PORT=$(read_config "A2A_SERVER__PORT" "8082")
-    A2A_ENABLED=$(read_config "A2A_SERVER__ENABLED" "true")
+    # Resolve the complete server configuration in one Python 3.13 process.
+    # Starting a fresh platform-config/Vault client for every individual key
+    # made `status` intermittently exceed its 10-second operational contract.
+    local python_bin
+    local values=()
+    python_bin=$(select_python_bin)
+    mapfile -t values < <("$python_bin" - <<'PY'
+import sys
+
+sys.path.insert(0, "src")
+from config.loader import get_config
+
+entries = (
+    ("api_server.host", "127.0.0.1"),
+    ("api_server.port", "8083"),
+    ("api_server.enabled", "true"),
+    ("web_server.host", "127.0.0.1"),
+    ("web_server.port", "8080"),
+    ("web_server.enabled", "true"),
+    ("mcp_server.host", "127.0.0.1"),
+    ("mcp_server.port", "8081"),
+    ("mcp_server.enabled", "true"),
+    ("a2a_server.host", "127.0.0.1"),
+    ("a2a_server.port", "8082"),
+    ("a2a_server.enabled", "true"),
+)
+for key, default in entries:
+    value = get_config(key, default=None)
+    if value is True:
+        print("true")
+    elif value is False:
+        print("false")
+    else:
+        print(default if value is None or value == "" else value)
+PY
+    )
+    if [ "${#values[@]}" -ne 12 ]; then
+        log_error "Failed to resolve complete server configuration"
+        return 1
+    fi
+
+    API_HOST=${values[0]}
+    API_PORT=${values[1]}
+    API_ENABLED=${values[2]}
+    WEB_HOST=${values[3]}
+    WEB_PORT=${values[4]}
+    WEB_ENABLED=${values[5]}
+    MCP_HOST=${values[6]}
+    MCP_PORT=${values[7]}
+    MCP_ENABLED=${values[8]}
+    A2A_HOST=${values[9]}
+    A2A_PORT=${values[10]}
+    A2A_ENABLED=${values[11]}
     
     # Server definitions: name:pid_file:port:script:log:enabled
     declare -g -A SERVERS

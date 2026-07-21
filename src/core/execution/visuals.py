@@ -36,6 +36,7 @@ import math
 import os
 import unicodedata
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from src.utils.logger import get_logger
 
@@ -76,6 +77,16 @@ try:  # pragma: no cover - import guard
     _HAVE_MPL = True
 except Exception:  # pragma: no cover - import guard
     _HAVE_MPL = False
+
+# Relationship/network diagrams use the same governed, in-image rendering path as the
+# other local charts. NetworkX is pinned in requirements.lock; keeping an import guard
+# preserves the existing chart-service fallback for deliberately minimal test images.
+try:  # pragma: no cover - import guard
+    import networkx as _nx
+
+    _HAVE_NX = True
+except Exception:  # pragma: no cover - import guard
+    _HAVE_NX = False
 
 # A clean, print-friendly categorical palette reused across every local chart type.
 _CHART_PALETTE = ["#2f6f8f", "#c1654b", "#5a9367", "#d8a657", "#7d6b9e", "#4a4e69", "#9d8189", "#52796f"]
@@ -464,6 +475,72 @@ def _is_png_b64(b64: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Single-figure renderers
 # --------------------------------------------------------------------------- #
+def _focus_outline_layers(focus: List[str]) -> List[Dict[str, Any]]:
+    """Boundary-only outlines for the focus country/countries, drawn as LINES (never fills).
+
+    Used when a raster ``basemap`` (relief/topographic/street tiles) supplies the land,
+    roads and relief: an opaque Natural Earth fill would hide that detail. A ``polygon`` layer
+    with a transparent fill is NOT reliable — the renderer fills alpha=0 as solid — so the
+    national boundary is emitted as ``line`` layers built from each polygon's exterior ring(s),
+    which frame the subject over the tiles without covering the relief.
+    """
+    out: List[Dict[str, Any]] = []
+    for n in focus or []:
+        if not n:
+            continue
+        g = _country_geometry(n)
+        if not g:
+            continue
+        gtype = g.get("type")
+        coords = g.get("coordinates") or []
+        rings: List[Any] = []
+        if gtype == "Polygon":
+            rings = list(coords)
+        elif gtype == "MultiPolygon":
+            for poly in coords:
+                rings.extend(poly)
+        for ring in rings:
+            if isinstance(ring, list) and len(ring) >= 2:
+                out.append({"type": "line",
+                            "geometry": {"type": "LineString", "coordinates": ring},
+                            "stroke": [40, 40, 60], "stroke_width": 2})
+    return out
+
+
+def _scale_date_layers(bbox: List[float], map_date: Optional[str]) -> List[Dict[str, Any]]:
+    """A geographic scale bar (bottom-left) and a map-date stamp (bottom-right).
+
+    The scale bar is drawn in EPSG:4326 layer coordinates: a horizontal line whose ground
+    length is a 'nice' round number of km at the map-centre latitude, plus a '<n> km' label.
+    Returns [] when the bbox is degenerate. Attribution is added by the geo renderer from the
+    basemap catalogue, so this covers the remaining acceptance-check furniture (scale + date).
+    """
+    try:
+        midlat = (bbox[1] + bbox[3]) / 2.0
+        span_km = abs(bbox[2] - bbox[0]) * 111.320 * max(0.05, math.cos(math.radians(midlat)))
+        if span_km <= 0:
+            return []
+        # target ~1/5 of the width, snapped to a 1/2/5 x 10^n round number of km
+        target = span_km / 5.0
+        mag = 10 ** math.floor(math.log10(target)) if target > 0 else 1
+        nice = next((m * mag for m in (5, 2, 1) if m * mag <= target), mag)
+        deg = nice / (111.320 * max(0.05, math.cos(math.radians(midlat))))
+        x0 = bbox[0] + abs(bbox[2] - bbox[0]) * 0.04
+        y0 = bbox[1] + abs(bbox[3] - bbox[1]) * 0.05
+        out: List[Dict[str, Any]] = [
+            {"type": "line", "geometry": {"type": "LineString", "coordinates": [[x0, y0], [x0 + deg, y0]]},
+             "stroke": [20, 20, 30], "stroke_width": 4},
+            {"type": "label", "at": [x0, y0 + abs(bbox[3] - bbox[1]) * 0.012],
+             "text": _ascii("%g km" % nice), "colour": [20, 20, 30]},
+        ]
+        if map_date:
+            out.append({"type": "label", "at": [bbox[2] - abs(bbox[2] - bbox[0]) * 0.24, y0],
+                        "text": _ascii("Map date %s UTC" % map_date), "colour": [30, 30, 40]})
+        return out
+    except Exception:
+        return []
+
+
 async def _render_one_map(
     spec: Dict[str, Any],
     dispatch_service: Callable[..., Awaitable[Any]],
@@ -471,7 +548,15 @@ async def _render_one_map(
     width: int = 1200,
     background: Tuple[int, int, int] = (208, 226, 240),
 ) -> Optional[Dict[str, Any]]:
-    """Render one map from a spec entry; return its URL/storage reference."""
+    """Render one map from a spec entry; return its URL/storage reference.
+
+    When the spec carries a raster ``basemap`` id (e.g. ``opentopomap`` for relief +
+    roads + admin boundaries, or ``osm_standard``), the tiles supply the land/relief/road
+    backdrop: we then skip the opaque Natural Earth land fill (it would hide the relief),
+    frame the subject with a boundary-only outline, and add a scale bar + map-date stamp so
+    the map carries its full cartographic furniture. Callers that set no ``basemap`` keep
+    the previous flat Natural Earth polygon backdrop unchanged.
+    """
     bbox = spec.get("bbox")
     if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
         logger.warning("visuals: map %r has no valid bbox; skipping", spec.get("id"))
@@ -491,12 +576,19 @@ async def _render_one_map(
     focus_list = list(focus) if isinstance(focus, (list, tuple)) else ([focus] if focus else [])
     highlight = [f for f in focus_list if f] + list(spec.get("highlight") or [])
     label_countries = spec.get("label_countries", True)
-    # Preferred path: clip every country in the bbox (fixes the antimeridian USA drop) and
-    # label them. Falls back to the explicit focus/neighbours backdrop without shapely.
-    backdrop = _all_country_layers(bbox, highlight=highlight, label_countries=bool(label_countries))
-    if backdrop is None:
-        backdrop = _backdrop_layers(spec.get("focus_country"), spec.get("neighbours") or [])
-    layers.extend(backdrop)
+    basemap = spec.get("basemap")
+    if basemap:
+        # Raster relief/topo/street tiles already carry land, roads, relief shading and
+        # admin boundaries. An opaque Natural Earth fill would hide all of it, so frame the
+        # subject with a boundary-only outline and let the tiles show through.
+        layers.extend(_focus_outline_layers(highlight))
+    else:
+        # Preferred path: clip every country in the bbox (fixes the antimeridian USA drop) and
+        # label them. Falls back to the explicit focus/neighbours backdrop without shapely.
+        backdrop = _all_country_layers(bbox, highlight=highlight, label_countries=bool(label_countries))
+        if backdrop is None:
+            backdrop = _backdrop_layers(spec.get("focus_country"), spec.get("neighbours") or [])
+        layers.extend(backdrop)
     layers.extend(_control_layers(spec.get("control") or [], spec.get("focus_country")))
     for ln in spec.get("lines") or []:
         coords = ln.get("coords") or ln.get("coordinates") or ln
@@ -512,6 +604,11 @@ async def _render_one_map(
     if spec.get("title"):
         layers.append(_title_layer(str(spec["title"]), bbox))
 
+    # Scale bar + map-date furniture (drawn in geographic coords) so a basemap-backed map
+    # carries its full cartographic furniture; the geo renderer adds basemap attribution.
+    if basemap:
+        layers.extend(_scale_date_layers(bbox, spec.get("map_date")))
+
     height = _aspect_height(bbox, width)
     legend_items = spec.get("legend") or []
     if legend_items:
@@ -522,28 +619,42 @@ async def _render_one_map(
     # W28M-1633 root cause: that path lives on the geospatial container's disk and the
     # notification/delivery container cannot read it, so every recipient hard_failed.
     args = {"width": width, "height": height, "bbox": bbox, "crs": "EPSG:4326",
-            "background": list(background), "transfer_mode": "base64", "layers": layers}
-    try:
-        raw = await dispatch_service(geo_service, "geo_render_map", args)
-    except Exception as exc:
-        logger.warning("visuals: geo_render_map failed for %r: %s", spec.get("id"), exc)
-        return None
-    b64 = _geo_png_b64(raw)
-    if b64:
-        ref: Dict[str, Any] = {"data": b64, "content_type": "image/png"}
-        asset_ref = _geo_asset_reference(raw) or {}
-        if asset_ref.get("asset_id"):
-            ref["asset_id"] = asset_ref["asset_id"]
-        return ref
-    # Fallback: only a genuinely fetchable HTTP(S) url is deliverable. A file:// url or a
-    # storage_path-only reference is undeliverable across containers, so skip the map
-    # (the report still sends without it) rather than hard-fail the whole message.
-    reference = _geo_asset_reference(raw) or {}
-    url = str(reference.get("url") or "")
-    if url.startswith("http://") or url.startswith("https://"):
-        return reference
-    logger.warning("visuals: map %r returned no inline PNG bytes or fetchable url; skipping "
-                   "(avoids the undeliverable cross-container storage_path)", spec.get("id"))
+            "transfer_mode": "base64", "layers": layers}
+    if basemap:
+        # A raster basemap supplies the backdrop; a flat background colour is then irrelevant.
+        args["basemap"] = str(basemap)
+        if spec.get("style"):
+            args["style"] = str(spec["style"])
+    else:
+        args["background"] = list(background)
+    # W28M-1636 R5: the geospatial service is flaky under estate load and intermittently returns no
+    # PNG bytes for a valid spec; since require_all_rendered fails the WHOLE delivery on one missing
+    # visual, RETRY the render a few times (with backoff) before giving up — a transient miss must
+    # not sink an otherwise-complete report.
+    import asyncio as _aio
+    raw = None
+    for _attempt in range(4):
+        try:
+            raw = await dispatch_service(geo_service, "geo_render_map", args)
+        except Exception as exc:
+            logger.warning("visuals: geo_render_map failed for %s (attempt %s): %s",
+                           spec.get("id"), _attempt + 1, exc)
+            raw = None
+        b64 = _geo_png_b64(raw)
+        if b64:
+            ref: Dict[str, Any] = {"data": b64, "content_type": "image/png"}
+            asset_ref = _geo_asset_reference(raw) or {}
+            if asset_ref.get("asset_id"):
+                ref["asset_id"] = asset_ref["asset_id"]
+            return ref
+        reference = _geo_asset_reference(raw) or {}
+        url = str(reference.get("url") or "")
+        if urlsplit(url).scheme.lower() in {"http", "https"}:
+            return reference
+        if _attempt < 3:
+            await _aio.sleep(2 + _attempt * 2)
+    logger.warning("visuals: map %r returned no inline PNG bytes or fetchable url after retries; "
+                   "skipping (avoids the undeliverable cross-container storage_path)", spec.get("id"))
     return None
 
 
@@ -584,8 +695,9 @@ def _render_chart_local(spec: Dict[str, Any]) -> Optional[str]:
     """Render a rich chart locally with matplotlib; return base64 PNG or None.
 
     Supported ``chart_type``: bar, grouped_bar, stacked_bar, hbar/horizontal_bar,
-    donut/pie, line, multiline, area. Anything else (or matplotlib absent) returns
-    None so the caller falls back to the chart MCP service.
+    donut/pie, line, multiline, area, radar and relationship/network/graph.
+    Anything else (or matplotlib absent) returns None so the caller falls back to
+    the chart MCP service.
     """
     if not _HAVE_MPL:
         return None
@@ -602,7 +714,123 @@ def _render_chart_local(spec: Dict[str, Any]) -> Optional[str]:
             "figure.facecolor": "white", "axes.facecolor": "#fbfbfb"})
         pal = _CHART_PALETTE
 
-        if ct in ("donut", "pie"):
+        if ct in ("relationship", "network", "graph"):
+            if not _HAVE_NX:
+                return None
+            import textwrap as _textwrap
+
+            raw_nodes = [n for n in (spec.get("nodes") or []) if isinstance(n, dict)]
+            raw_edges = [e for e in (spec.get("edges") or []) if isinstance(e, dict)]
+            node_ids = [str(n.get("id") or "").strip() for n in raw_nodes]
+            if not raw_nodes or not raw_edges or any(not node_id for node_id in node_ids):
+                return None
+            graph = _nx.DiGraph()
+            node_by_id = {}
+            for node, node_id in zip(raw_nodes, node_ids):
+                node_by_id[node_id] = node
+                graph.add_node(node_id)
+            valid_edges = []
+            for edge in raw_edges:
+                source = str(edge.get("source") or "").strip()
+                target = str(edge.get("target") or "").strip()
+                if source in graph and target in graph:
+                    graph.add_edge(source, target)
+                    valid_edges.append((source, target, _ascii(edge.get("label") or "")))
+            if not valid_edges:
+                return None
+
+            groups = []
+            for node_id in node_ids:
+                group = str(node_by_id[node_id].get("group") or "actor")
+                if group not in groups:
+                    groups.append(group)
+            group_colours = {group: pal[i % len(pal)] for i, group in enumerate(groups)}
+            node_colours = [group_colours[str(node_by_id[node_id].get("group") or "actor")] for node_id in graph.nodes]
+            labels = {
+                node_id: _textwrap.fill(
+                    _ascii(node_by_id[node_id].get("label") or node_id),
+                    width=13,
+                    break_long_words=False,
+                )
+                for node_id in graph.nodes
+            }
+
+            # A seeded spring layout is deterministic across reruns while retaining enough
+            # separation for readable edge labels. Figure size grows gently with node count.
+            pos = _nx.spring_layout(graph, seed=42, k=max(0.9, 2.8 / math.sqrt(len(graph.nodes))), iterations=120)
+            # Spring layout may still leave heavily connected actors almost touching. Enforce
+            # a small deterministic separation so node labels and relationship text cannot be
+            # obscured by a neighbouring node.
+            ordered_nodes = list(graph.nodes)
+            for _ in range(8):
+                for left_index, left in enumerate(ordered_nodes):
+                    for right in ordered_nodes[left_index + 1:]:
+                        dx = float(pos[right][0] - pos[left][0])
+                        dy = float(pos[right][1] - pos[left][1])
+                        distance = math.hypot(dx, dy)
+                        if distance >= 0.36:
+                            continue
+                        if distance < 1e-9:
+                            dx, dy, distance = 1.0, 0.0, 1.0
+                        shift = (0.36 - distance) / 2.0
+                        unit_x, unit_y = dx / distance, dy / distance
+                        pos[left][0] -= unit_x * shift
+                        pos[left][1] -= unit_y * shift
+                        pos[right][0] += unit_x * shift
+                        pos[right][1] += unit_y * shift
+            fig, ax = _plt.subplots(figsize=(max(10.5, len(graph.nodes) * 1.05), 7.5))
+            _nx.draw_networkx_nodes(
+                graph, pos, ax=ax, node_color=node_colours, node_size=4200,
+                edgecolors="white", linewidths=1.4, alpha=0.96,
+            )
+            edge_groups = {}
+            for source, target, _label in valid_edges:
+                edge_groups.setdefault(target, []).append((source, target))
+            edge_radii = {}
+            for target_edges in edge_groups.values():
+                target_edges.sort()
+                count = len(target_edges)
+                for index, edge in enumerate(target_edges):
+                    edge_radii[edge] = 0.04 if count == 1 else -0.18 + (0.36 * index / (count - 1))
+            for edge, radius in edge_radii.items():
+                _nx.draw_networkx_edges(
+                    graph, pos, edgelist=[edge], ax=ax, edge_color="#6b7280", width=1.5, alpha=0.78,
+                    arrows=True, arrowsize=16, arrowstyle="-|>", connectionstyle=f"arc3,rad={radius}",
+                    min_source_margin=22, min_target_margin=22,
+                )
+            _nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=8, font_color="white", font_weight="bold")
+            edge_labels = {(source, target): label for source, target, label in valid_edges if label}
+            if edge_labels:
+                # Labels on relationships converging on one actor need different positions;
+                # drawing every label at the default midpoint merges text into an unreadable
+                # string (for example, "coercion support"). Spread them along the edge.
+                by_target = {}
+                for edge in edge_labels:
+                    by_target.setdefault(edge[1], []).append(edge)
+                for target_edges in by_target.values():
+                    target_edges.sort()
+                    count = len(target_edges)
+                    for index, edge in enumerate(target_edges):
+                        label_pos = 0.5 if count == 1 else 0.26 + (0.48 * index / (count - 1))
+                        _nx.draw_networkx_edge_labels(
+                            graph, pos, edge_labels={edge: edge_labels[edge]}, ax=ax, font_size=6,
+                            font_color="#374151", rotate=False, label_pos=label_pos,
+                            connectionstyle=f"arc3,rad={edge_radii[edge]}",
+                            bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.82},
+                        )
+            if groups:
+                from matplotlib.patches import Patch as _Patch
+
+                ax.legend(
+                    handles=[_Patch(facecolor=group_colours[group], label=_ascii(group)) for group in groups],
+                    frameon=False, fontsize=8, loc="upper left", ncol=min(len(groups), 4),
+                )
+            ax.set_title(title, pad=16)
+            ax.margins(0.32)
+            ax.axis("off")
+            fig.tight_layout(pad=1.5)
+
+        elif ct in ("donut", "pie"):
             labels = [_ascii(r.get(spec.get("x") or "label")) for r in rows]
             vals = [float(r.get(spec.get("y") or "value") or 0) for r in rows]
             if not vals:
@@ -716,7 +944,9 @@ def _render_chart_local(spec: Dict[str, Any]) -> Optional[str]:
             ax.set_title(title)
             # Right-anchored 35° ticks read cleanly for country/entity labels without overlap.
             for _lbl in ax.get_xticklabels():
-                _lbl.set_rotation(35); _lbl.set_ha("right"); _lbl.set_rotation_mode("anchor")
+                _lbl.set_rotation(35)
+                _lbl.set_ha("right")
+                _lbl.set_rotation_mode("anchor")
             ax.grid(axis="y", alpha=0.3)
             ax.set_axisbelow(True)
             for s in ("top", "right"):
@@ -1057,7 +1287,7 @@ async def render_visuals(
           }],
           "charts": [{
             "id": "aid", "title": "...", "after": "<heading substring>",
-            # rich local types: bar|line|area|hbar|donut|pie|grouped_bar|stacked_bar|multiline
+            # rich local types: bar|line|area|hbar|donut|pie|grouped_bar|stacked_bar|multiline|relationship
             # (rendered with matplotlib when present); else falls back to the chart MCP
             # service for bar|line|area|scatter|table via renderer matplotlib|vega_lite|great_tables.
             "chart_type": "grouped_bar",
@@ -1098,7 +1328,7 @@ async def render_visuals(
             "filename": cid + ".png",
         }
         url = str(reference.get("url") or "")
-        if url.startswith("http://") or url.startswith("https://"):
+        if urlsplit(url).scheme.lower() in {"http", "https"}:
             image["url"] = url
         else:
             # A file:// url or a storage_path-only reference points at a path only the

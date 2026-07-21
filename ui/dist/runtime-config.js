@@ -20,6 +20,6 @@ window.__RUNTIME_CONFIG__ = {
   A2A_BASE_URL: `${window.location.origin}/a2a`,
   AUTH_MODE: 'cookie',
   APP_VERSION: '',
-  PRODUCT_NAME: 'Cloud-Dog Expert agent',
+  PRODUCT_NAME: 'Expert Agent',
   PRODUCT_DESCRIPTION: 'Multi-interface AI orchestration platform that runs API, Web UI, MCP, and A2A services together; manages experts, channels, sessions, files, knowledge, testing, and analytics with role-based controls.'
 };

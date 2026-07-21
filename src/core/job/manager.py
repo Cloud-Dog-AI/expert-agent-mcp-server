@@ -40,6 +40,18 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_TERMINAL_COMPLETION_STATUSES = {
+    "completed",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "timeout",
+    "dead_lettered",
+    "ttl_expired",
+    "archived",
+}
+
 
 class JobManager:
     """Manages jobs and call logs."""
@@ -142,7 +154,7 @@ class JobManager:
                 existing_metadata.update(metadata)
                 job.metadata_json = json.dumps(existing_metadata)
 
-            if status in ["completed", "failed"]:
+            if status and str(status).strip().lower() in _TERMINAL_COMPLETION_STATUSES:
                 job.completed_at = datetime.utcnow()
 
             db.commit()

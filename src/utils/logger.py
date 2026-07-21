@@ -88,21 +88,25 @@ class LoggerAdapter:
     """Compatibility wrapper around ``cloud_dog_logging`` application loggers."""
 
     def __init__(self, name: str, *, pii_redaction: bool = True) -> None:
+        """Create a platform logger adapter with optional PII redaction."""
         self._platform_logger = platform_get_logger(name, pii_redaction=False)
         self._underlying_logger = self._platform_logger.underlying_logger
         self._pii_redaction = pii_redaction
 
     def _redact_message(self, message: Any) -> Any:
+        """Redact one log message when redaction is enabled."""
         if not self._pii_redaction:
             return message
         return PIIRedactor.redact(str(message))
 
     def _redact_args(self, args: tuple[Any, ...]) -> tuple[Any, ...]:
+        """Redact positional formatting arguments when enabled."""
         if not self._pii_redaction:
             return args
         return tuple(PIIRedactor.redact(str(arg)) for arg in args)
 
     def _redact_extra(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Return structured logging kwargs with safe contextual fields."""
         updated = dict(kwargs)
         extra: dict[str, Any] = {}
         raw_extra = kwargs.get("extra")
@@ -117,6 +121,7 @@ class LoggerAdapter:
         return updated
 
     def debug(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted debug-level event."""
         self._underlying_logger.debug(
             self._redact_message(msg),
             *self._redact_args(args),
@@ -124,6 +129,7 @@ class LoggerAdapter:
         )
 
     def info(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted informational event."""
         self._underlying_logger.info(
             self._redact_message(msg),
             *self._redact_args(args),
@@ -131,6 +137,7 @@ class LoggerAdapter:
         )
 
     def warning(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted warning event."""
         self._underlying_logger.warning(
             self._redact_message(msg),
             *self._redact_args(args),
@@ -138,6 +145,7 @@ class LoggerAdapter:
         )
 
     def error(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted error event."""
         self._underlying_logger.error(
             self._redact_message(msg),
             *self._redact_args(args),
@@ -145,6 +153,7 @@ class LoggerAdapter:
         )
 
     def critical(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted critical event."""
         self._underlying_logger.critical(
             self._redact_message(msg),
             *self._redact_args(args),
@@ -152,6 +161,7 @@ class LoggerAdapter:
         )
 
     def exception(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Emit a redacted exception event with traceback context."""
         kwargs.setdefault("exc_info", True)
         self.error(msg, *args, **kwargs)
 

@@ -22,6 +22,12 @@ set -e
 require_main_or_release_branch() {
     local branch
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    # A publication-suffixed build is an explicitly local verification
+    # artifact. The suffix path suppresses latest/registry tagging below, so
+    # permit the closed-loop R16 repair branch without weakening normal builds.
+    if [[ -n "${PUBLICATION_TAG_SUFFIX:-}" ]]; then
+        return 0
+    fi
     case "${branch}" in
         main|release/*)
             return 0
@@ -60,6 +66,16 @@ CERT_CITY="San Francisco"
 CERT_ORG="CloudDog"
 CERT_CN="localhost"
 CERT_DAYS=365
+
+# Render a URL safely for diagnostics.  Package-index URLs may carry Vault-sourced
+# userinfo; never place that userinfo in logs, terminal transcripts, or evidence.
+redact_url_userinfo() {
+    URL_TO_REDACT="$1" python3 "${SCRIPT_DIR}/redact-url.py"
+}
+
+url_has_userinfo() {
+    URL_TO_REDACT="$1" python3 "${SCRIPT_DIR}/redact-url.py" --has-userinfo
+}
 
 # Colors for output
 RED='\033[0;31m'
@@ -322,7 +338,15 @@ if [ "${VARIANT}" = "public" ]; then
             exit 2
             ;;
     esac
-    echo -e "${GREEN}Public build: single package index (no extra-index): ${PUBLIC_INDEX_URL}${NC}"
+    echo -e "${GREEN}Public build: single package index (no extra-index): $(redact_url_userinfo "${PUBLIC_INDEX_URL}")${NC}"
+    PUBLIC_INDEX_HOST="$(URL_TO_PARSE="${PUBLIC_INDEX_URL}" python3 -c "import os; from urllib.parse import urlsplit; print(urlsplit(os.environ['URL_TO_PARSE']).hostname or '')")"
+    cat > "$PIP_CONF" << EOF
+[global]
+index-url = ${PUBLIC_INDEX_URL}
+trusted-host = ${PUBLIC_INDEX_HOST}
+EOF
+    chmod 600 "$PIP_CONF"
+    PIP_CONF_SECRET_ARG="--secret id=pip_conf,src=${PIP_CONF}"
     BUILD_ARGS="$BUILD_ARGS --build-arg PIP_INDEX_URL=${PUBLIC_INDEX_URL}"
     # Proxy passthrough for transparent-proxy environments.
     BUILD_ARGS="$BUILD_ARGS --build-arg HTTP_PROXY=${HTTP_PROXY:-} --build-arg HTTPS_PROXY=${HTTPS_PROXY:-} --build-arg NO_PROXY=${NO_PROXY:-}"
@@ -340,10 +364,14 @@ else
         echo -e "${RED}       Set PYPI_URL, or use --variant public for the external build.${NC}" >&2
         exit 2
     fi
-    PYPI_HOST_ARG="$(python3 -c "from urllib.parse import urlsplit; print(urlsplit('${PYPI_URL_ARG}').hostname or '')")"
-    if [ -z "$PYPI_USERNAME_ARG" ] || [ -z "$PYPI_PASSWORD_ARG" ]; then
+    PYPI_HOST_ARG="$(URL_TO_PARSE="${PYPI_URL_ARG}" python3 -c "import os; from urllib.parse import urlsplit; print(urlsplit(os.environ['URL_TO_PARSE']).hostname or '')")"
+    PYPI_URL_HAS_USERINFO=false
+    if url_has_userinfo "${PYPI_URL_ARG}"; then
+        PYPI_URL_HAS_USERINFO=true
+    fi
+    if { [ -z "$PYPI_USERNAME_ARG" ] || [ -z "$PYPI_PASSWORD_ARG" ]; } && [ "$PYPI_URL_HAS_USERINFO" = false ]; then
         echo -e "${YELLOW}WARNING: PYPI credentials not supplied.${NC}" >&2
-        echo -e "${YELLOW}  PYPI_URL=${PYPI_URL_ARG}${NC}" >&2
+        echo -e "${YELLOW}  PYPI_URL=$(redact_url_userinfo "${PYPI_URL_ARG}")${NC}" >&2
         echo -e "${YELLOW}  PYPI_USERNAME=$([ -n "$PYPI_USERNAME_ARG" ] && echo '<set>' || echo '<empty>')${NC}" >&2
         echo -e "${YELLOW}  PYPI_PASSWORD=$([ -n "$PYPI_PASSWORD_ARG" ] && echo '<set>' || echo '<empty>')${NC}" >&2
         echo -e "${YELLOW}  Build will proceed using anonymous package-index access.${NC}" >&2
@@ -352,19 +380,21 @@ else
     if [ -n "$PYPI_USERNAME_ARG" ] && [ -n "$PYPI_PASSWORD_ARG" ]; then
         cat > "$PIP_CONF" << EOF
 [global]
-extra-index-url = https://${PYPI_USERNAME_ARG}:${PYPI_PASSWORD_ARG}@${PYPI_URL_ARG#https://}
+index-url = https://${PYPI_USERNAME_ARG}:${PYPI_PASSWORD_ARG}@${PYPI_URL_ARG#https://}
 trusted-host = ${PYPI_HOST_ARG}
-               files.pythonhosted.org
 EOF
         echo -e "${GREEN}pip.conf generated with authenticated PyPI access.${NC}"
     else
         cat > "$PIP_CONF" << EOF
 [global]
-extra-index-url = ${PYPI_URL_ARG}
+index-url = ${PYPI_URL_ARG}
 trusted-host = ${PYPI_HOST_ARG}
-               files.pythonhosted.org
 EOF
-        echo -e "${YELLOW}pip.conf generated with anonymous PyPI access.${NC}"
+        if [ "$PYPI_URL_HAS_USERINFO" = true ]; then
+            echo -e "${GREEN}pip.conf generated with authenticated PyPI access (URL userinfo redacted).${NC}"
+        else
+            echo -e "${YELLOW}pip.conf generated with anonymous PyPI access.${NC}"
+        fi
     fi
     chmod 600 "$PIP_CONF"
     PIP_CONF_SECRET_ARG="--secret id=pip_conf,src=${PIP_CONF}"
@@ -399,8 +429,9 @@ if DOCKER_BUILDKIT=1 docker build --network="$DOCKER_BUILD_NETWORK" -t "$IMAGE_N
     fi
     
 else
+    BUILD_STATUS=$?
     echo -e "${RED}Docker build failed!${NC}"
-    exit 1
+    exit "${BUILD_STATUS}"
 fi
 
 rm -f "$PIP_CONF"

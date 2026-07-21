@@ -23,6 +23,13 @@ SECRETS_FILE="${3:-}"
 NETWORK_MODE="${NETWORK_MODE:-host}"
 PORT_ARGS=()
 
+for required in VAULT_ADDR VAULT_TOKEN VAULT_MOUNT_POINT VAULT_CONFIG_PATH; do
+  if [[ -z "${!required:-}" ]]; then
+    echo "ERROR: source the approved Vault bootstrap helper before local Docker run" >&2
+    exit 2
+  fi
+done
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Env file not found: ${ENV_FILE}" >&2
   exit 2
@@ -51,6 +58,10 @@ docker run -d \
   --name "${CONTAINER_NAME}" \
   --network="${NETWORK_MODE}" \
   --env-file "${ENV_FILE}" \
+  --env VAULT_ADDR \
+  --env VAULT_TOKEN \
+  --env VAULT_MOUNT_POINT \
+  --env VAULT_CONFIG_PATH \
   -e "EXPERT_ENV_FILE=/app/${ENV_FILE}" \
   -e "CLOUD_DOG__EXPERT__ENV_FILE=/app/${ENV_FILE}" \
   -e "CLOUD_DOG__EXPERT__ENV_SECRETS_FILES=/app/${SECRETS_FILE}" \

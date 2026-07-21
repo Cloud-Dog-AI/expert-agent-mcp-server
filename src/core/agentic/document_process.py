@@ -34,6 +34,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.common.reasoning_boundary import clean_final_content
 from src.config.loader import get_config
 from src.utils.logger import get_logger
 
@@ -95,7 +96,7 @@ class IntentResult:
 
 def _strip_think(text: str) -> str:
     """Remove qwen3 ``<think>...</think>`` chain-of-thought blocks."""
-    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
+    return clean_final_content(text)
 
 
 def _canonical(value: Optional[str], synonyms: Dict[str, tuple]) -> Optional[str]:
@@ -425,6 +426,13 @@ class DocumentProcessAgent:
 
     @staticmethod
     def _md_to_html(md: str) -> str:
+        # W28M-1636 R3: deterministically remove unresolved citation artifacts the local model
+        # appends to SQL-sourced figures ("... 94.5% [n/a]") or leaves as an empty bracket ("[]").
+        # These are never a real numbered [n] source, so stripping them (with any preceding
+        # space) yields a clean figure. Applied to every document body before HTML render so no
+        # report can carry an [n/a] regardless of model non-determinism.
+        md = re.sub(r"[ \t]*\[\s*[nN]\s*/?\s*[aA]\.?\s*\]", "", md)
+        md = re.sub(r"[ \t]*\[\s*\]", "", md)
         h, ul = [], False
         for ln in md.splitlines():
             s = ln.rstrip()
@@ -624,6 +632,11 @@ class DocumentProcessAgent:
                   f"(template v{template.get('version')} {str(template.get('checksum'))[:12]}); "
                   f"drafted on qwen3:14b; corrected via plain-english + humanise experts.*")
         body = "\n\n".join(finals)
+        # W28M-1636 R3: deterministically strip unresolved [n/a] / empty-bracket citation artifacts
+        # the local model appends to SQL figures, so BOTH the markdown and HTML (and the PDF rendered
+        # from the HTML) are clean regardless of model non-determinism. Real [n] sources are kept.
+        body = re.sub(r"[ \t]*\[\s*[nN]\s*/?\s*[aA]\.?\s*\]", "", body)
+        body = re.sub(r"[ \t]*\[\s*\]", "", body)
         full_md = f"# {family.title()} Document: {str(target).title()}\n\n{byline}\n\n{body}"
         full_html = (f"<h1>{family.title()} Document: {str(target).title()}</h1>\n"
                      f"<p><em>{byline.strip('*')}</em></p>\n" + self._md_to_html(body))

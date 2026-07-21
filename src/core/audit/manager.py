@@ -25,13 +25,14 @@ Related Architecture: SE1.3
 Related Tests: AT1.6, UT1.29
 
 Recent Changes:
+- 2026-07-16: Preserve naive-UTC audit timestamps using Python 3.13-safe APIs
 - Initial implementation
 """
 
 import hashlib
 import hmac
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -218,7 +219,7 @@ class AuditManager:
 
         # Prepare event data for signature
         # Store all relevant fields in a combined details dict for signature verification
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(UTC).replace(tzinfo=None).isoformat()
         combined_details = details.copy() if details else {}
         # Only include non-None values to avoid JSON null issues
         if user_id is not None:

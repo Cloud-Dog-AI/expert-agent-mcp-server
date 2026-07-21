@@ -32,7 +32,7 @@ Recent Changes:
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from cloud_dog_cache.invalidation import CONFIG_CHANGE, invalidate_event
 
 from src.database.connection import get_db
@@ -50,12 +50,14 @@ class CreateGroupRequest(BaseModel):
     name: str
     description: Optional[str] = None
     enabled: bool = True
+    member_user_ids: list[int] = Field(default_factory=list)
 
 
 class UpdateGroupRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+    member_user_ids: Optional[list[int]] = None
 
 
 class AssignGroupAdminRequest(BaseModel):
@@ -64,6 +66,32 @@ class AssignGroupAdminRequest(BaseModel):
 
 class UpdateMemberRoleRequest(BaseModel):
     role: str  # "member" or "admin"
+
+
+def _serialize_group(group) -> Dict[str, Any]:
+    """Serialize a group with the shared-IDAM membership contract."""
+    members = [
+        {
+            "id": membership.user.id,
+            "username": membership.user.username,
+            "email": membership.user.email,
+            "display_name": membership.user.display_name,
+            "role": membership.role,
+        }
+        for membership in group.members
+        if membership.user is not None
+    ]
+    return {
+        "id": group.id,
+        "group_id": group.id,
+        "name": group.name,
+        "description": group.description,
+        "enabled": group.enabled,
+        "member_count": len(members),
+        "members": members,
+        "created_at": group.created_at.isoformat() if group.created_at else None,
+        "updated_at": group.updated_at.isoformat() if group.updated_at else None,
+    }
 
 
 @router.post("")
@@ -77,7 +105,10 @@ async def create_group(
     manager = GroupManager(db)
     try:
         group = manager.create_group(
-            name=request.name, description=request.description, enabled=request.enabled
+            name=request.name,
+            description=request.description,
+            enabled=request.enabled,
+            member_user_ids=request.member_user_ids,
         )
         try:
             log_audit_event(
@@ -96,13 +127,7 @@ async def create_group(
             actor=current_user.username,
         )
         await invalidate_event(CONFIG_CHANGE)
-        return {
-            "id": group.id,
-            "name": group.name,
-            "description": group.description,
-            "enabled": group.enabled,
-            "created_at": group.created_at.isoformat(),
-        }
+        return _serialize_group(group)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -122,19 +147,8 @@ async def list_groups(
 
     groups = db_session.query(Group).all()
 
-    return {
-        "total": len(groups),
-        "items": [
-            {
-                "id": g.id,
-                "name": g.name,
-                "description": g.description,
-                "enabled": g.enabled,
-                "created_at": g.created_at.isoformat(),
-            }
-            for g in groups
-        ],
-    }
+    serialized = [_serialize_group(group) for group in groups]
+    return {"total": len(serialized), "items": serialized, "groups": serialized}
 
 
 @router.get("/{group_id}")
@@ -151,14 +165,7 @@ async def get_group(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    return {
-        "id": group.id,
-        "name": group.name,
-        "description": group.description,
-        "enabled": group.enabled,
-        "created_at": group.created_at.isoformat(),
-        "updated_at": group.updated_at.isoformat(),
-    }
+    return _serialize_group(group)
 
 
 @router.put("/{group_id}")
@@ -184,6 +191,24 @@ async def update_group(
     if request.enabled is not None:
         group.enabled = request.enabled
 
+    if request.member_user_ids is not None:
+        requested_member_ids = list(dict.fromkeys(request.member_user_ids))
+        existing_user_ids = {
+            row[0] for row in db.query(User.id).filter(User.id.in_(requested_member_ids)).all()
+        }
+        missing_user_ids = sorted(set(requested_member_ids) - existing_user_ids)
+        if missing_user_ids:
+            raise HTTPException(status_code=400, detail=f"Unknown member user IDs: {missing_user_ids}")
+        from src.database.models import GroupMember
+
+        existing_memberships = {membership.user_id: membership for membership in group.members}
+        for user_id, membership in existing_memberships.items():
+            if user_id not in requested_member_ids:
+                db.delete(membership)
+        for user_id in requested_member_ids:
+            if user_id not in existing_memberships:
+                db.add(GroupMember(group_id=group.id, user_id=user_id, role="member"))
+
     db.commit()
     db.refresh(group)
     try:
@@ -204,14 +229,7 @@ async def update_group(
     )
     await invalidate_event(CONFIG_CHANGE)
 
-    return {
-        "id": group.id,
-        "name": group.name,
-        "description": group.description,
-        "enabled": group.enabled,
-        "created_at": group.created_at.isoformat(),
-        "updated_at": group.updated_at.isoformat(),
-    }
+    return _serialize_group(group)
 
 
 @router.delete("/{group_id}")

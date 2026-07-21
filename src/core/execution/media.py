@@ -18,16 +18,17 @@ blocked by a missing tile or image.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
 import math
 import os
 import re
-import ssl
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
+
+from cloud_dog_api_kit.clients import ClientTimeout, create_http_client
 
 from src.config.loader import get_config
 from src.utils.logger import get_logger
@@ -83,10 +84,6 @@ _UA = str(
     )
     or "cloud-dog-demo/1.0 research-report-imagery"
 )
-_CTX = ssl.create_default_context()
-_CTX.check_hostname = False
-_CTX.verify_mode = ssl.CERT_NONE
-
 # Tile backends. {z}/{x}/{y}; attribution shown on the map per provider terms.
 _TILES = {
     "satellite": ("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -113,10 +110,23 @@ _OFFTOPIC_TYPE = re.compile(
 
 
 def _http_get(url: str, timeout: int = 8) -> bytes:
-    """Fetch bytes from a public imagery endpoint with the configured user agent."""
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, context=_CTX, timeout=timeout) as r:
-        return r.read()
+    """Fetch imagery through the shared platform HTTP-client contract."""
+
+    async def _fetch() -> bytes:
+        """Execute one verified asynchronous imagery request."""
+        client_timeout = ClientTimeout(
+            connect=float(timeout),
+            read=float(timeout),
+            total=float(timeout),
+        )
+        async with create_http_client(timeout=client_timeout) as client:
+            response = await client.get(url, headers={"User-Agent": _UA})
+            response.raise_for_status()
+            return response.content
+
+    # Media rendering runs in an asyncio worker thread (strategy.py), so this
+    # synchronous boundary can safely own the short-lived event loop.
+    return asyncio.run(_fetch())
 
 
 # --------------------------------------------------------------------------- maps

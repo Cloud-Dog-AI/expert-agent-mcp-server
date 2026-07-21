@@ -403,6 +403,101 @@ class ConnectionManager:
             self.disconnect(conn, topic)
 
 
+class A2AMutationAuthMiddleware:
+    """Require an authenticated principal for A2A mutation surfaces.
+
+    Discovery, health, topic listing, and event reads remain public. HTTP
+    mutations and WebSocket command channels accept the same configured or
+    user-backed API keys and bearer tokens as the MCP transport.
+    """
+
+    _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if scope_type == "http":
+            method = str(scope.get("method") or "GET").upper()
+            if method not in self._SAFE_METHODS and not self._authenticate(scope):
+                return await self._send_401(send)
+        elif scope_type == "websocket" and not self._authenticate(scope):
+            await send(
+                {
+                    "type": "websocket.close",
+                    "code": 4401,
+                    "reason": "Authentication required",
+                }
+            )
+            return
+        return await self.app(scope, receive, send)
+
+    @staticmethod
+    def _authenticate(scope) -> bool:
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        api_key = headers.get("x-api-key")
+        if api_key:
+            for config_key in (
+                "api_key",
+                "api_server.api_key",
+                "a2a_server.api_key",
+                "client_api.admin_api_key",
+            ):
+                try:
+                    configured = get_config(config_key)
+                except Exception:
+                    configured = None
+                if configured and str(configured) == api_key:
+                    return True
+
+        authorization = headers.get("authorization", "")
+        bearer = (
+            authorization.split(" ", 1)[1].strip()
+            if authorization.lower().startswith("bearer ")
+            else ""
+        )
+        if not api_key and not bearer:
+            return False
+
+        try:
+            from src.database.connection import get_db
+            from src.servers.api.auth import _validate_api_key_user, _validate_bearer_user
+
+            db_gen = get_db()
+            db = next(db_gen)
+            try:
+                user = (
+                    _validate_api_key_user(str(api_key), db)
+                    if api_key
+                    else _validate_bearer_user(bearer, db)
+                )
+            finally:
+                db_gen.close()
+            return bool(user and getattr(user, "enabled", False))
+        except Exception as exc:  # pragma: no cover - auth resolution must fail closed
+            logger.warning("A2A auth resolution error (failing closed): %s", exc)
+            return False
+
+    @staticmethod
+    async def _send_401(send) -> None:
+        payload = b'{"detail":"Authentication required"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(payload)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
+
+
 class A2AServer(BaseServer):
     """Agent-to-Agent WebSocket server."""
 
@@ -410,6 +505,7 @@ class A2AServer(BaseServer):
         super().__init__("A2A Server", "a2a_server")
         self._a2a_base_path = normalise_base_path(get_config("a2a_server.base_path"), default="/a2a")
         self.app = self._create_platform_app()
+        self.app.add_middleware(A2AMutationAuthMiddleware)
         self._remove_platform_health_routes()
         self._configure_platform_timeout()
         self.manager = ConnectionManager()

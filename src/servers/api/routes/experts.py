@@ -41,6 +41,7 @@ from src.database.connection import get_db
 from src.common.a2a_client import publish_config_change_event
 from src.core.expert.manager import ExpertManager
 from src.core.execution.transactional import TransactionalExecutor
+from src.core.security.redaction import merge_write_only_values, redact_sensitive_values
 from src.core.service.composition import ServiceCompositionManager
 from src.core.audit.logger import log_audit_event
 from src.database.models import ExternalService, ServiceBinding, SubExpertBinding, User
@@ -64,8 +65,9 @@ def _llm_view(llm_params_json: Optional[str]) -> Dict[str, Any]:
             params = json.loads(llm_params_json) or {}
         except Exception:
             params = {}
-    view: Dict[str, Any] = {k: params.get(k) for k in _LLM_VIEW_KEYS}
-    view["llm_params"] = params
+    safe_params = redact_sensitive_values(params)
+    view: Dict[str, Any] = {k: safe_params.get(k) for k in _LLM_VIEW_KEYS}
+    view["llm_params"] = safe_params
     return view
 
 
@@ -73,7 +75,7 @@ def _merge_llm_config(llm_params: Optional[Dict[str, Any]], request: BaseModel) 
     """Fold any top-level per-expert LLM settings (temperature/top_k/max_tokens/num_ctx/
     num_predict/think) into the llm_params dict so they are persisted in one place and
     APPLIED at execution (FR-053). Explicit llm_params keys win over the top-level mirror."""
-    merged: Dict[str, Any] = dict(llm_params or {})
+    merged = merge_write_only_values({}, llm_params)
     for key in _LLM_VIEW_KEYS:
         val = getattr(request, key, None)
         if val is not None and key not in merged:
@@ -278,12 +280,7 @@ async def get_expert(
     if not expert:
         raise HTTPException(status_code=404, detail="Expert configuration not found")
 
-    llm_params = {}
-    if expert.llm_params_json:
-        try:
-            llm_params = json.loads(expert.llm_params_json)
-        except Exception:
-            pass
+    llm_params = _llm_view(expert.llm_params_json)["llm_params"]
 
     access_control = {}
     if expert.access_control_json:
@@ -444,7 +441,7 @@ async def update_expert(
                     merged = json.loads(existing.llm_params_json) or {}
                 except Exception:
                     merged = {}
-            merged.update(request.llm_params or {})
+            merged = merge_write_only_values(merged, request.llm_params)
             for key in _LLM_VIEW_KEYS:
                 val = getattr(request, key, None)
                 if val is not None:

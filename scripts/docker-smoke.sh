@@ -17,12 +17,23 @@ set -euo pipefail
 
 ENV_NAME="${1:-env-smoke-docker}"
 
+for required in VAULT_ADDR VAULT_TOKEN VAULT_MOUNT_POINT VAULT_CONFIG_PATH; do
+  if [[ -z "${!required:-}" ]]; then
+    echo "ERROR: source the approved Vault bootstrap helper before Docker smoke" >&2
+    exit 2
+  fi
+done
+
 # Run smoke tests in a disposable container to avoid host Python/network mismatches.
 docker run --rm \
   --network=host \
+  --env VAULT_ADDR \
+  --env VAULT_TOKEN \
+  --env VAULT_MOUNT_POINT \
+  --env VAULT_CONFIG_PATH \
   --entrypoint python \
   -v "$(pwd)":/app \
   -w /app \
   expert-agent-mcp-server:latest \
-  -m pytest --env "${ENV_NAME}" -q \
+  -m pytest --env "${ENV_NAME}" -q --tb=no --no-showlocals \
   tests/system/ST1.42_DockerSingleContainerSmoke/test_docker_single_container_smoke.py

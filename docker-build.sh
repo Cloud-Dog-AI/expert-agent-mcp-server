@@ -8,6 +8,13 @@ set -euo pipefail
 require_main_or_release_branch() {
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  # A publication-suffixed build is an explicitly local, non-pushing
+  # verification artifact. Permit that closed-loop path from a repair branch;
+  # the delegated builder suppresses registry tagging whenever the suffix is
+  # present.
+  if [[ -n "${PUBLICATION_TAG_SUFFIX:-}" ]]; then
+    return 0
+  fi
   case "${branch}" in
     main|release/*)
       return 0

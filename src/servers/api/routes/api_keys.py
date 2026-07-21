@@ -27,6 +27,8 @@ Related Tests: AT1.28, AT1.29, AT1.34
 
 from __future__ import annotations
 
+import ast
+import json
 from datetime import datetime
 from typing import Any, Dict, Optional, List
 
@@ -47,8 +49,13 @@ router = APIRouter(prefix="/api-keys", tags=["api-keys"], dependencies=[Depends(
 
 class CreateAPIKeyRequest(BaseModel):
     user_id: Optional[int] = None
+    owner_user_id: Optional[int] = None
     group_id: Optional[int] = None
     name: Optional[str] = None
+    label: Optional[str] = None
+    groups: Optional[List[str]] = None
+    scopes: Optional[List[str]] = None
+    expires_at: Optional[datetime] = None
     expires_days: Optional[int] = None
 
     # Optional explicit feature flags for logs/histories/channel access
@@ -57,12 +64,39 @@ class CreateAPIKeyRequest(BaseModel):
     read_channels: bool = True
 
 
+class UpdateAPIKeyRequest(BaseModel):
+    name: Optional[str] = None
+    label: Optional[str] = None
+    groups: Optional[List[str]] = None
+    scopes: Optional[List[str]] = None
+    expires_at: Optional[datetime] = None
+
+
+def _scopes_for(row: APIKey) -> List[str]:
+    """Return normalized scopes from current JSON and legacy literal storage."""
+    if not row.scopes_json:
+        return []
+    try:
+        parsed = json.loads(row.scopes_json)
+    except (TypeError, ValueError):
+        try:
+            parsed = ast.literal_eval(row.scopes_json)
+        except (SyntaxError, ValueError):
+            return []
+    return [str(value) for value in parsed] if isinstance(parsed, list) else []
+
+
 def _to_api_key_view(row: APIKey) -> Dict[str, Any]:
+    scopes = _scopes_for(row)
     return {
         "id": row.id,
         "user_id": row.user_id,
+        "owner_user_id": row.user_id,
         "group_id": row.group_id,
         "name": row.name,
+        "label": row.name,
+        "groups": scopes,
+        "scopes": scopes,
         "read_channels": bool(row.read_channels),
         "write_channels": bool(row.write_channels),
         "read_logs": bool(row.read_logs),
@@ -70,6 +104,8 @@ def _to_api_key_view(row: APIKey) -> Dict[str, Any]:
         "read_histories": bool(row.read_histories),
         "write_histories": bool(row.write_histories),
         "revoked": bool(row.revoked),
+        "disabled": bool(row.revoked),
+        "is_active": not bool(row.revoked),
         "expires_at": row.expires_at.isoformat() if row.expires_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -85,12 +121,15 @@ async def create_api_key(
 ) -> Dict[str, Any]:
     """Admin-only: create an API key for a user (or unscoped)."""
     manager = APIKeyManager(db)
+    owner_user_id = request.user_id if request.user_id is not None else request.owner_user_id
+    name = request.name if request.name is not None else request.label
+    scopes = request.scopes if request.scopes is not None else request.groups
     result = manager.generate_key(
-        user_id=request.user_id,
+        user_id=owner_user_id,
         group_id=request.group_id,
-        name=request.name,
+        name=name,
         expires_days=request.expires_days,
-        scopes=None,
+        scopes=scopes,
     )
     api_key_obj = result["api_key"]
 
@@ -98,6 +137,8 @@ async def create_api_key(
     api_key_obj.read_logs = bool(request.read_logs)
     api_key_obj.read_histories = bool(request.read_histories)
     api_key_obj.read_channels = bool(request.read_channels)
+    if request.expires_at is not None:
+        api_key_obj.expires_at = request.expires_at.replace(tzinfo=None)
     db.commit()
     db.refresh(api_key_obj)
 
@@ -108,6 +149,8 @@ async def create_api_key(
         actor=_admin.username,
     )
     await invalidate_event(CONFIG_CHANGE)
+    created_view = _to_api_key_view(api_key_obj)
+    created_view.update({"key": result["key"], "secret": result["key"]})
     return {
         "id": api_key_obj.id,
         "key": result["key"],  # plaintext - caller must store securely
@@ -115,6 +158,7 @@ async def create_api_key(
         "group_id": api_key_obj.group_id,
         "name": api_key_obj.name,
         "expires_at": api_key_obj.expires_at.isoformat() if api_key_obj.expires_at else None,
+        "api_key": created_view,
     }
 
 
@@ -139,6 +183,7 @@ async def list_api_keys(
     return {"total": len(rows), "api_keys": [_to_api_key_view(r) for r in rows]}
 
 
+@router.post("/{key_id}/revoke")
 @router.delete("/{key_id}")
 async def revoke_api_key(
     key_id: int,
@@ -158,6 +203,37 @@ async def revoke_api_key(
     )
     await invalidate_event(CONFIG_CHANGE)
     return {"success": True, "id": key_id, "revoked": True}
+
+
+@router.put("/{key_id}")
+async def update_api_key(
+    key_id: int,
+    request: UpdateAPIKeyRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(verify_admin),
+) -> Dict[str, Any]:
+    """Admin-only: update the shared-IDAM editable API-key metadata."""
+    row = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="API key not found")
+    name = request.name if request.name is not None else request.label
+    scopes = request.scopes if request.scopes is not None else request.groups
+    if name is not None:
+        row.name = name
+    if scopes is not None:
+        row.scopes_json = json.dumps(scopes)
+    if request.expires_at is not None:
+        row.expires_at = request.expires_at.replace(tzinfo=None)
+    db.commit()
+    db.refresh(row)
+    publish_config_change_event(
+        action="update",
+        resource_type="api_key",
+        resource_id=int(row.id),
+        actor=_admin.username,
+    )
+    await invalidate_event(CONFIG_CHANGE)
+    return {"api_key": _to_api_key_view(row), **_to_api_key_view(row)}
 
 
 @router.post("/{key_id}/rotate")

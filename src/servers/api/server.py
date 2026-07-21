@@ -170,6 +170,11 @@ class APIServer(BaseServer):
             "description": "RESTful API for Expert Agent MCP Server",
             "cors_origins": ["*"],
             "auth_verify_fn": self._verify_api_key_for_health_status,
+            # Install the project-selected platform health router exactly once
+            # in _install_platform_health_router(). With current FastAPI,
+            # include_router() is represented by a dynamic _IncludedRouter and
+            # cannot be reliably removed by filtering app.router.routes later.
+            "enable_health": False,
         }
         try:
             app = create_app(
@@ -338,38 +343,46 @@ class APIServer(BaseServer):
         authenticates against THIS API backend (no local cred-seeding fork).
         ``admin`` is the existing bootstrap admin
         (CLOUD_DOG__EXPERT__WEB_SERVER__USERNAME/PASSWORD). This seeds the other
-        two as REAL users via the user-management path (``UserManager`` —
-        NO direct DB mutation): read-write -> backend role ``user`` (normalises
-        to the read-write flat role); read-only -> backend role ``viewer``
-        (normalises to the read-only flat role). Idempotent; never blocks startup.
+        two as REAL users: read-write -> backend role ``user`` (normalises to the
+        read-write flat role); read-only -> backend role ``viewer`` (normalises
+        to the read-only flat role).
+
+        Their passwords come from ``web_server.read_write_password`` /
+        ``web_server.read_only_password`` when set, otherwise they fall back to
+        the RESOLVED ADMIN password (``web_server.password``, else
+        ``test.user.password``) — never a committed literal (W28A-SEC-R17 /
+        CDP-SEC-006). This keeps all three roles logging in with an injected
+        secret and stops read-write/read-only relying on a public value. The
+        rows are seeded directly (``pwd_hash``) exactly like the bootstrap admin
+        so the shared admin credential is accepted regardless of the interactive
+        password-complexity policy, and are re-seeded idempotently on restart so
+        a rotated admin password propagates. Never blocks startup.
         """
         try:
             from src.config.loader import get_config
-            from src.core.auth.user_manager import UserManager
+            from src.core.auth.password import hash_password
             from src.database.connection import get_db
+            from src.database.models import User
+
+            # Resolved admin password: the injected secret the bootstrap admin
+            # authenticates with. No literal fallback — if it cannot be resolved
+            # and no per-role password is configured, that role is not seeded.
+            admin_password = str(
+                get_config("web_server.password")
+                or get_config("test.user.password")
+                or ""
+            )
 
             seeds = (
                 (
                     str(get_config("web_server.read_write_username") or "read-write").strip(),
-                    # Falls back to the resolved admin password (web_server.password,
-                    # else test.user.password) when unset; no committed literal (W28A-SEC-R17).
-                    str(
-                        get_config("web_server.read_write_password")
-                        or get_config("web_server.password")
-                        or get_config("test.user.password")
-                        or ""
-                    ),
+                    str(get_config("web_server.read_write_password") or admin_password),
                     "read-write@expert.local",
                     "user",
                 ),
                 (
                     str(get_config("web_server.read_only_username") or "read-only").strip(),
-                    str(
-                        get_config("web_server.read_only_password")
-                        or get_config("web_server.password")
-                        or get_config("test.user.password")
-                        or ""
-                    ),
+                    str(get_config("web_server.read_only_password") or admin_password),
                     "read-only@expert.local",
                     "viewer",
                 ),
@@ -378,24 +391,31 @@ class APIServer(BaseServer):
             db_gen = get_db()
             db = next(db_gen)
             try:
-                manager = UserManager(db)
                 for username, password, email, role in seeds:
-                    if not username:
+                    if not username or not password:
+                        # No username or no resolvable password -> skip; never
+                        # seed a literal or a password-less local login.
                         continue
-                    existing = manager.get_user(username=username)
-                    if existing is None:
-                        manager.create_user(
+                    user = db.query(User).filter(User.username == username).first()
+                    if user is None:
+                        user = User(
                             username=username,
                             email=email,
-                            password=password,
                             display_name=username,
+                            pwd_hash=hash_password(password),
                             role=role,
                             enabled=True,
                             user_type="local",
                         )
-                    elif existing.role != role or not existing.enabled:
-                        # Keep the seeded demo role correct without re-creating.
-                        manager.update_user(existing.id, role=role, enabled=True)
+                        db.add(user)
+                    else:
+                        # Keep the seeded demo user correct and converge its
+                        # password onto the resolved value without re-creating.
+                        user.role = role
+                        user.enabled = True
+                        user.user_type = "local"
+                        user.pwd_hash = hash_password(password)
+                    db.commit()
             finally:
                 db.close()
         except Exception as e:

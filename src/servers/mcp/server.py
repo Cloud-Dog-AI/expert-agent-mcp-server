@@ -26,9 +26,11 @@ Related Tests: ST1.2, AT1.23
 
 Recent Changes:
 - Initial implementation
+- W28M-1634: fail async jobs closed when a tool returns an MCP error envelope
 """
 
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -45,11 +47,240 @@ from fastapi.responses import StreamingResponse
 from src.servers.base import BaseServer
 from src.config.loader import get_config
 from src.core.session.manager import SessionManager
+from src.core.job.manager import JobManager
 from src.core.llm.manager import LLMManager
+from src.database.connection import get_db
 from src.servers.mcp.tools import MCPTools
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _async_result_failure(result: Any) -> Optional[str]:
+    """Return a useful failure message for a failed async tool result.
+
+    MCP tools can report failure either by raising or by returning an MCP
+    ``isError`` envelope.  Async job status must reflect both forms; otherwise
+    callers and quality gates see a completed job whose result is an error.
+    """
+
+    if not isinstance(result, dict):
+        return None
+
+    nested_result = result.get("result")
+    if isinstance(nested_result, dict):
+        nested_failure = _async_result_failure(nested_result)
+        if nested_failure:
+            return nested_failure
+
+    explicit_error = result.get("error")
+    if explicit_error:
+        if isinstance(explicit_error, dict):
+            explicit_error = (
+                explicit_error.get("message")
+                or explicit_error.get("detail")
+                or explicit_error
+            )
+        return str(explicit_error)[:1000]
+
+    if result.get("isError") is not True:
+        return None
+
+    for key in ("message", "detail"):
+        value = result.get(key)
+        if value:
+            return str(value)[:1000]
+
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                return str(item["text"])[:1000]
+    return "MCP tool returned an error result"
+
+
+class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
+    """Keep MCP async jobs visible in the application's durable Jobs surface.
+
+    The shared MCP console links every ``wait=false`` acknowledgement to the
+    Jobs page.  The API-kit in-memory store alone cannot satisfy that contract:
+    its UUID exists only inside the MCP process and is absent from ``/api/jobs``.
+    This store retains the API-kit status contract while creating and updating
+    a corresponding database Job whose metadata contains the platform job id.
+    """
+
+    def submit(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> str:
+        runner = context.get("runner")
+        if not callable(runner):
+            raise TypeError("async job context requires a callable 'runner'")
+
+        result_formatter = context.get("result_formatter")
+        if result_formatter is not None and not callable(result_formatter):
+            raise TypeError(
+                "async job context 'result_formatter' must be callable when provided"
+            )
+
+        platform_job_id = f"job-{uuid.uuid4().hex}"
+        app_job_id = self._create_source_job(
+            platform_job_id,
+            tool_name,
+            context.get("request"),
+        )
+        with self._lock:
+            self._jobs[platform_job_id] = {
+                "status": "pending",
+                "tool_name": tool_name,
+                "arguments": dict(arguments),
+                "app_job_id": app_job_id,
+            }
+
+        task = asyncio.create_task(
+            self._run_source_job(
+                platform_job_id,
+                app_job_id,
+                runner,
+                result_formatter,
+            )
+        )
+        with self._lock:
+            self._tasks[platform_job_id] = task
+        return platform_job_id
+
+    async def _run_source_job(
+        self,
+        platform_job_id: str,
+        app_job_id: int,
+        runner: Any,
+        result_formatter: Any,
+    ) -> None:
+        with self._lock:
+            job = dict(self._jobs.get(platform_job_id) or {})
+            job["status"] = "running"
+            self._jobs[platform_job_id] = job
+        self._update_source_job(app_job_id, status="running")
+
+        try:
+            result = runner()
+            if inspect.isawaitable(result):
+                result = await result
+            if result_formatter is not None:
+                result = result_formatter(result)
+            result_failure = _async_result_failure(result)
+            with self._lock:
+                job = dict(self._jobs.get(platform_job_id) or {})
+                job["status"] = "failed" if result_failure else "completed"
+                job["result"] = result
+                if result_failure:
+                    job["error"] = result_failure
+                else:
+                    job.pop("error", None)
+                self._jobs[platform_job_id] = job
+            if result_failure:
+                self._update_source_job(
+                    app_job_id,
+                    status="failed",
+                    error_info={"message": result_failure},
+                )
+            else:
+                # Persist the result on the durable Job too (mirrors the REST async runner) so a
+                # wait=false acknowledgement is fully trackable - status AND response - via /api/jobs.
+                try:
+                    response_received = result if isinstance(result, str) else json.dumps(result)
+                except (TypeError, ValueError):
+                    response_received = None
+                if response_received is not None:
+                    self._update_source_job(
+                        app_job_id, status="completed", response_received=response_received
+                    )
+                else:
+                    self._update_source_job(app_job_id, status="completed")
+        except Exception as exc:
+            with self._lock:
+                job = dict(self._jobs.get(platform_job_id) or {})
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                self._jobs[platform_job_id] = job
+            self._update_source_job(
+                app_job_id,
+                status="failed",
+                error_info={"message": str(exc)},
+            )
+        finally:
+            with self._lock:
+                self._tasks.pop(platform_job_id, None)
+
+    @staticmethod
+    def _request_user_id(request: Any) -> Optional[int]:
+        if request is None:
+            return None
+        authorization = str(request.headers.get("authorization") or "")
+        api_key = request.headers.get("x-api-key")
+        bearer = (
+            authorization.split(" ", 1)[1].strip()
+            if authorization.lower().startswith("bearer ")
+            else ""
+        )
+        if not api_key and not bearer:
+            return None
+
+        from src.servers.api.auth import _validate_api_key_user, _validate_bearer_user
+
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            user = (
+                _validate_api_key_user(str(api_key), db)
+                if api_key
+                else _validate_bearer_user(bearer, db)
+            )
+            return int(user.id) if user is not None else None
+        finally:
+            db_gen.close()
+
+    @classmethod
+    def _create_source_job(
+        cls,
+        platform_job_id: str,
+        tool_name: str,
+        request: Any,
+    ) -> int:
+        user_id = cls._request_user_id(request)
+        auth_method = (
+            "bearer"
+            if request and request.headers.get("authorization")
+            else "api_key"
+        )
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            job = JobManager(db).create_job(
+                job_type="mcp_execute_tool",
+                user_id=user_id,
+                prompt_sent=tool_name,
+                metadata={
+                    "mcp_platform_job_id": platform_job_id,
+                    "mcp_tool_name": tool_name,
+                    "request_source": "mcp_console",
+                    "auth_method": auth_method,
+                },
+            )
+            return int(job.id)
+        finally:
+            db_gen.close()
+
+    @staticmethod
+    def _update_source_job(app_job_id: int, **updates: Any) -> None:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            JobManager(db).update_job(app_job_id, **updates)
+        finally:
+            db_gen.close()
 
 
 class MCPToolAuthMiddleware:
@@ -63,9 +294,11 @@ class MCPToolAuthMiddleware:
     This pure-ASGI middleware authenticates every MCP request
     (the JSON-RPC ``/mcp`` endpoint and the bespoke ``/mcp/<tool>``
     REST routes) via ``X-API-Key`` — a valid user key (DB) OR the configured
-    expert-agent service/admin key. Anonymous callers receive ``401`` BEFORE any
-    tool runs. Health stays open; MCP transport POSTs require authentication
-    before discovery or tool dispatch.
+    expert-agent service/admin key — or a valid user JWT in ``Authorization:
+    Bearer``. The bearer path is used by the cookie-authenticated Web BFF; the
+    browser never receives or supplies a service/admin key. Anonymous callers
+    receive ``401`` BEFORE any tool runs. Health stays open; MCP transport POSTs
+    require authentication before discovery or tool dispatch.
     """
 
     _OPEN_PATHS = {"/health", "/mcp/health", "/mcp/tools"}
@@ -164,25 +397,32 @@ class MCPToolAuthMiddleware:
             for k, v in scope.get("headers", [])
         }
         api_key = headers.get("x-api-key")
-        if not api_key:
+        if api_key:
+            # 1) configured expert-agent service/admin key(s)
+            for cfg_key in ("api_key", "api_server.api_key", "mcp_server.api_key", "client_api.admin_api_key"):
+                try:
+                    configured = get_config(cfg_key)
+                except Exception:
+                    configured = None
+                if configured and str(configured) == api_key:
+                    return True
+        authorization = headers.get("authorization", "")
+        bearer = authorization.split(" ", 1)[1].strip() if authorization.lower().startswith("bearer ") else ""
+        if not api_key and not bearer:
             return False
-        # 1) configured expert-agent service/admin key(s)
-        for cfg_key in ("api_key", "api_server.api_key", "mcp_server.api_key", "client_api.admin_api_key"):
-            try:
-                configured = get_config(cfg_key)
-            except Exception:
-                configured = None
-            if configured and str(configured) == api_key:
-                return True
-        # 2) DB-backed user API key
+        # 2) DB-backed user API key or user bearer token
         try:
             from src.database.connection import get_db
-            from src.servers.api.auth import _validate_api_key_user
+            from src.servers.api.auth import _validate_api_key_user, _validate_bearer_user
 
             db_gen = get_db()
             db = next(db_gen)
             try:
-                user = _validate_api_key_user(str(api_key), db)
+                user = (
+                    _validate_api_key_user(str(api_key), db)
+                    if api_key
+                    else _validate_bearer_user(bearer, db)
+                )
             finally:
                 db.close()
             return bool(user and getattr(user, "enabled", False))
@@ -286,7 +526,7 @@ class MCPServer(BaseServer):
         self.tools = MCPTools()
         self._server_task: Optional[asyncio.Task] = None
         self._stopping = False
-        self._async_job_store = InMemoryAsyncJobStore()
+        self._async_job_store = SourceBackedAsyncJobStore()
         # Keep stdio JSON-RPC state local to the stdio transport helper.
         self._rpc_sessions: Dict[str, Dict[str, Any]] = {}
         self._async_jobs: Dict[str, Dict[str, Any]] = {}
@@ -440,7 +680,7 @@ class MCPServer(BaseServer):
             self._build_tool_registry(),
             transport_modes=self._transport_modes(),
             async_job_store=self._async_job_store,
-            async_job_status_path="/jobs/{job_id}",
+            async_job_status_path="/mcp/jobs/{job_id}",
             legacy_sse=LegacySSEConfig(
                 sse_path="/sse",
                 message_path="/message",
@@ -720,6 +960,7 @@ class MCPServer(BaseServer):
                 arguments=args.get("arguments"),
                 auth_context=args.get("auth_context"),
                 session_id=args.get("session_id"),
+                timeout_seconds=args.get("timeout_seconds"),
             )
         if tool_name == "run_research_cycle":
             return await self.tools.run_research_cycle_tool(
@@ -793,48 +1034,38 @@ class MCPServer(BaseServer):
             if not name:
                 return self._jsonrpc_error(request_id, -32602, "Missing required param: name")
 
-            # Async job mode: wait=false returns a reference and resolves through /jobs/{job_id}
+            # Async job mode: wait=false returns a reference resolved via /mcp/jobs/{job_id}.
+            # Route through the durable Source-backed async job store (the intended, wired path)
+            # so the acknowledgement is a REAL database Job created exactly like the proven REST
+            # async runner (_process_expert_execute_job) - visible on the Jobs surface and reliably
+            # tracked - rather than an in-process-only UUID. The prior inline branch bypassed that
+            # store: it recorded status only in `self._async_jobs`, creating no durable job, so
+            # callers saw "Session not found" and long document runs went untracked. That is why
+            # the configured scheduler `execute_tool` (wait=false) target produced phantom,
+            # non-delivering jobs while the REST async path did not (W28M-1635 R2 / raw ledger R50).
             if arguments.get("wait") is False:
-                job_id = f"job-{uuid.uuid4().hex[:12]}"
                 guid = uuid.uuid4().hex[:8]
-                self._async_jobs[job_id] = {"status": "running", "result": None, "error": None}
 
-                async def _resolve_job():
-                    try:
-                        # NOTE: an in-process concurrency semaphore around this call was
-                        # tried (W28M-1633) to bound bursts, but it regressed report
-                        # delivery (documents completed text but their render/deliver step
-                        # never fired), so it was reverted. Downstream-overload protection
-                        # is handled by the sql-agent query-result cache instead.
-                        tool_result = await self._run_tool_call(name, arguments)
-                        if isinstance(tool_result, dict) and tool_result.get("error"):
-                            self._async_jobs[job_id] = {
-                                "status": "failed",
-                                "error": tool_result.get("error"),
-                                "result": None,
-                            }
-                            return
-                        self._async_jobs[job_id] = {
-                            "status": "completed",
-                            "error": None,
-                            "result": {
-                                "content": [{"type": "text", "text": json.dumps(tool_result)}],
-                                "structuredContent": tool_result,
-                            },
-                        }
-                    except Exception as exc:
-                        self._async_jobs[job_id] = {
-                            "status": "failed",
-                            "error": str(exc),
-                            "result": None,
-                        }
+                def _runner(_n=name, _a=arguments):
+                    return self._run_tool_call(_n, _a)
 
-                # Hold a strong reference so the event loop cannot GC a long-running
-                # job mid-execution (see self._async_job_tasks). Discard on completion.
-                task = asyncio.create_task(_resolve_job())
-                self._async_job_tasks.add(task)
-                task.add_done_callback(self._async_job_tasks.discard)
-                return self._jsonrpc_result(request_id, {"job_id": job_id, "guid": guid})
+                def _formatter(result: Any) -> Any:
+                    # Preserve an MCP error envelope as-is so the store's failure detection and
+                    # error-text extraction see it unchanged; wrap a successful result in the
+                    # standard content/structuredContent shape for the caller.
+                    if isinstance(result, dict) and result.get("isError") is True:
+                        return result
+                    return {
+                        "content": [{"type": "text", "text": json.dumps(result)}],
+                        "structuredContent": result,
+                    }
+
+                platform_job_id = self._async_job_store.submit(
+                    name, arguments, {"runner": _runner, "result_formatter": _formatter}
+                )
+                return self._jsonrpc_result(
+                    request_id, {"job_id": platform_job_id, "guid": guid}
+                )
 
             tool_result = await self._run_tool_call(name, arguments)
             if isinstance(tool_result, dict) and tool_result.get("error"):

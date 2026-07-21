@@ -26,7 +26,7 @@ doc-conformance-stamp: 2026-06-18T00:00:00Z
 Prerequisites:
 
 - Docker 24 or newer with BuildKit enabled
-- Python 3.12 if you run the package locally
+- CPython 3.13 (the repository pin is authoritative) if you run the package locally
 - A public package index that hosts the Cloud-Dog platform packages (default: `https://pypi.org/simple/`)
 
 Build an isolated publication-test image (public variant):
@@ -47,7 +47,7 @@ The smoke run uses [env.example](env.example) and probes:
 ## Local Development
 
 ```bash
-python3 -m venv .venv
+python3.13 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools wheel
 .venv/bin/python -m pip install -e ".[dev]" --index-url https://pypi.org/simple/
 ```

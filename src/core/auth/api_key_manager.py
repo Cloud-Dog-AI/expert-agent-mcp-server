@@ -28,6 +28,7 @@ Recent Changes:
 - Initial implementation
 """
 
+import json
 import secrets
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -131,7 +132,7 @@ class APIKeyManager:
                 user_id=user_id,
                 group_id=group_id,
                 name=name,
-                scopes_json=str(scopes) if scopes else None,
+                scopes_json=json.dumps(scopes) if scopes else None,
                 expires_at=expires_at,
             )
             db.add(api_key)

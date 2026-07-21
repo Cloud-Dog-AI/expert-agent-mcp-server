@@ -30,10 +30,12 @@ Recent Changes:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+from threading import Thread
 from typing import Optional
 
-import requests
+from cloud_dog_api_kit.clients import ClientTimeout, create_http_client
 
 from src.config.loader import get_config
 from src.utils.logger import get_logger
@@ -72,6 +74,20 @@ def _event_timeout_seconds() -> float:
     return float(raw_timeout)
 
 
+def _a2a_auth_headers() -> dict[str, str]:
+    """Resolve the service credential used for internal A2A mutations."""
+    for config_key in (
+        "api_key",
+        "api_server.api_key",
+        "a2a_server.api_key",
+        "client_api.admin_api_key",
+    ):
+        api_key = get_config(config_key)
+        if api_key:
+            return {"X-API-Key": str(api_key)}
+    raise RuntimeError("A2A mutation service API key not configured")
+
+
 def _resource_topic(resource_type: str) -> str:
     """Map config resource types to A2A topics."""
     normalized = str(resource_type).strip().lower()
@@ -101,12 +117,39 @@ def publish_config_change_event(
         "actor": str(actor or "system"),
     }
     try:
-        response = requests.post(
-            _a2a_broadcast_url(topic),
-            json=payload,
-            timeout=_event_timeout_seconds(),
-        )
-        response.raise_for_status()
+        timeout = _event_timeout_seconds()
+
+        async def _publish() -> None:
+            """Publish the event through the shared verified platform client."""
+            async with create_http_client(
+                timeout=ClientTimeout(connect=min(5.0, timeout), read=timeout, total=timeout)
+            ) as client:
+                response = await client.post(
+                    _a2a_broadcast_url(topic),
+                    headers=_a2a_auth_headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+
+        error: list[BaseException] = []
+
+        def _runner() -> None:
+            """Own the compatibility worker event loop and retain any failure."""
+            try:
+                asyncio.run(_publish())
+            except BaseException as exc:  # propagate after joining the compatibility bridge
+                error.append(exc)
+
+        # MCP tool methods and FastAPI routes currently share this synchronous
+        # helper contract. Run the platform async client in a bounded worker so
+        # callers never create a raw requests/httpx client or nest event loops.
+        worker = Thread(target=_runner, name="a2a-config-publisher", daemon=True)
+        worker.start()
+        worker.join(timeout + 5.0)
+        if worker.is_alive():
+            raise TimeoutError("A2A config event delivery exceeded its timeout")
+        if error:
+            raise error[0]
         return True
     except Exception as exc:
         logger.warning(

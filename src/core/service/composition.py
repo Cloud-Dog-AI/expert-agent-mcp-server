@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy.orm import Session
@@ -32,8 +33,9 @@ logger = get_logger(__name__)
 
 
 SEARCH_MCP_SERVICE_NAME = "search-mcp"
-SEARCH_MCP_AUTH_CONFIG_KEY = "dev.services.searchmcp.api_key"
-SEARCH_MCP_URI_CONFIG_KEY = "dev.services.searchmcp.uri"
+SEARCH_MCP_AUTH_CONFIG_KEY = "service_credentials.searchmcp0.api_key"
+SEARCH_MCP_MCP_URL_CONFIG_KEY = "dev.services.searchmcp.mcp_url"
+SEARCH_MCP_LEGACY_URI_CONFIG_KEY = "dev.services.searchmcp.uri"
 
 SEARCH_MCP_TOOL_CATALOG: List[Dict[str, Any]] = [
     {
@@ -79,6 +81,20 @@ class ServiceCompositionManager:
     @staticmethod
     def _tool_cache_key(service: ExternalService) -> Tuple[int, str]:
         return (int(service.id), str(service.endpoint_url))
+
+    @staticmethod
+    def _usable_service_endpoint(value: Any) -> Optional[str]:
+        """Return a usable HTTP(S) endpoint, rejecting template placeholders."""
+        endpoint = str(value or "").strip()
+        if not endpoint or "<" in endpoint or ">" in endpoint:
+            return None
+        parsed = urlsplit(endpoint)
+        hostname = str(parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            return None
+        if hostname == "example.com" or hostname.endswith(".example.com"):
+            return None
+        return endpoint
 
     def _get_circuit_breaker(self, binding: Optional[ServiceBinding]) -> CircuitBreaker:
         service_id = int(binding.service_id if binding else 0)
@@ -174,7 +190,9 @@ class ServiceCompositionManager:
                 return str(resolved)
         return None
 
-    def _auth_headers(self, service: ExternalService, auth_context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    def _auth_headers(
+        self, service: ExternalService, auth_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, str]:
         headers: Dict[str, str] = {}
         auth_config = self._parse_json(service.auth_config_json)
         auth_type = str(auth_config.get("type") or auth_config.get("auth_type") or "").lower()
@@ -187,9 +205,7 @@ class ServiceCompositionManager:
             header_name = str(auth_config["header_name"]).strip()
             header_scheme = str(auth_config.get("header_scheme") or "Bearer").strip()
             headers[header_name] = (
-                resolved_value
-                if not header_scheme
-                else f"{header_scheme} {resolved_value}"
+                resolved_value if not header_scheme else f"{header_scheme} {resolved_value}"
             )
         headers.setdefault("Accept", "application/json")
         if auth_context and auth_context.get("correlation_id"):
@@ -200,7 +216,9 @@ class ServiceCompositionManager:
         db = self._get_db()
         return db.query(ServiceBinding).filter(ServiceBinding.service_id == service_id).first()
 
-    def ensure_search_mcp_service(self) -> ExternalService:
+    def ensure_search_mcp_service(
+        self, service_name_override: Optional[str] = None
+    ) -> ExternalService:
         """Ensure the managed search-mcp ExternalService row exists.
 
         The row stores only config-key references for credentials. Runtime values
@@ -209,14 +227,28 @@ class ServiceCompositionManager:
         """
         db = self._get_db()
         service_name = str(
-            get_config("research.search_service_name") or SEARCH_MCP_SERVICE_NAME
+            service_name_override
+            or get_config("research.search_service_name")
+            or SEARCH_MCP_SERVICE_NAME
         ).strip()
-        endpoint = str(
-            get_config(SEARCH_MCP_URI_CONFIG_KEY) or get_config("research.search_url") or ""
-        ).strip()
+        service = db.query(ExternalService).filter(ExternalService.name == service_name).first()
+        endpoint = next(
+            (
+                candidate
+                for candidate in (
+                    self._usable_service_endpoint(get_config(SEARCH_MCP_MCP_URL_CONFIG_KEY)),
+                    self._usable_service_endpoint(get_config("research.search_url")),
+                    self._usable_service_endpoint(get_config(SEARCH_MCP_LEGACY_URI_CONFIG_KEY)),
+                    self._usable_service_endpoint(service.endpoint_url if service else None),
+                )
+                if candidate
+            ),
+            None,
+        )
         if not endpoint:
             raise RuntimeError(
-                f"{SEARCH_MCP_URI_CONFIG_KEY} or research.search_url must be configured"
+                f"{SEARCH_MCP_MCP_URL_CONFIG_KEY} or research.search_url must be configured "
+                "with a non-placeholder HTTP(S) endpoint"
             )
 
         auth_config = {
@@ -233,7 +265,6 @@ class ServiceCompositionManager:
             "discovered_tools": SEARCH_MCP_TOOL_CATALOG,
         }
 
-        service = db.query(ExternalService).filter(ExternalService.name == service_name).first()
         if service:
             if service.type != "mcp":
                 raise ValueError(f"Service '{service_name}' exists but is not an MCP service")
@@ -337,7 +368,11 @@ class ServiceCompositionManager:
         service = db.query(ExternalService).filter(ExternalService.id == service_id).first()
         if not service:
             raise ValueError("Service not found")
-        status = "unhealthy"
+        # A failed probe is not proof that the tool endpoint is unhealthy. The
+        # MCP call can still succeed when a proxy briefly drops the independent
+        # health request, so preserve that distinction and let the circuit
+        # breaker observe the authoritative invocation result.
+        status = "unknown"
         detail = None
         try:
             response = await self.client.get(self._resolve_health_url(service), timeout=5.0)
@@ -417,6 +452,7 @@ class ServiceCompositionManager:
         arguments: Optional[Dict[str, Any]] = None,
         auth_context: Optional[Dict[str, Any]] = None,
         session_id: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         db = self._get_db()
         service = db.query(ExternalService).filter(ExternalService.id == service_id).first()
@@ -425,14 +461,19 @@ class ServiceCompositionManager:
 
         binding = self._binding_for_service(service_id)
         breaker = self._get_circuit_breaker(binding)
-        timeout = float(
+        configured_timeout = float(
             (binding.timeout_seconds if binding and binding.timeout_seconds else None)
             or get_config("service_composition.invocation_timeout")
             or 30
         )
+        timeout = configured_timeout
+        if timeout_seconds is not None:
+            timeout = float(timeout_seconds)
+            if timeout <= 0:
+                raise ValueError("timeout_seconds must be greater than zero")
         started = time.perf_counter()
         health = await self.health_check(service_id)
-        if health["health_status"] != "healthy":
+        if health["health_status"] == "unhealthy":
             return {
                 "service_id": service_id,
                 "tool_name": tool_name,

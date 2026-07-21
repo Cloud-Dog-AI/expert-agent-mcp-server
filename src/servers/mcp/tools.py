@@ -38,6 +38,7 @@ from src.core.auth.user_manager import UserManager
 from src.core.auth.api_key_manager import APIKeyManager
 from src.core.vector.manager import VectorStoreManager
 from src.core.llm.manager import LLMManager
+from src.core.security.redaction import merge_write_only_values, redact_sensitive_values
 from src.common.a2a_client import publish_config_change_event
 from src.database.models import APIKey, User
 from src.servers.api.auth import _validate_api_key_user
@@ -114,7 +115,7 @@ class MCPTools:
             "description": expert.description,
             "llm_provider": expert.llm_provider,
             "llm_model": expert.llm_model,
-            "llm_params": llm_params,
+            "llm_params": redact_sensitive_values(llm_params),
             "tools": tools,
             "enabled": expert.enabled,
         }
@@ -649,7 +650,17 @@ class MCPTools:
                 llm_base_url = update_data.pop("llm_base_url", None)
                 llm_params = update_data.get("llm_params")
                 if llm_base_url is not None or llm_params is not None:
-                    resolved_llm_params = dict(llm_params or {})
+                    existing = ExpertManager(db).get_expert(expert_id=expert_id)
+                    existing_llm_params: Dict[str, Any] = {}
+                    if existing and existing.llm_params_json:
+                        try:
+                            existing_llm_params = json.loads(existing.llm_params_json) or {}
+                        except Exception:
+                            existing_llm_params = {}
+                    resolved_llm_params = merge_write_only_values(
+                        existing_llm_params,
+                        llm_params,
+                    )
                     if llm_base_url:
                         resolved_llm_params["base_url"] = llm_base_url
                     update_data["llm_params"] = resolved_llm_params
@@ -984,8 +995,9 @@ class MCPTools:
         arguments: Optional[Dict[str, Any]] = None,
         auth_context: Optional[Dict[str, Any]] = None,
         session_id: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Invoke a remote tool on a bound external service."""
+        """Invoke a remote tool with an optional governed per-call timeout."""
         try:
             from src.core.service.composition import ServiceCompositionManager
 
@@ -997,6 +1009,7 @@ class MCPTools:
                     arguments=arguments or {},
                     auth_context=auth_context or {},
                     session_id=session_id,
+                    timeout_seconds=timeout_seconds,
                 )
         except Exception as e:
             logger.error(f"Invoke service tool error: {e}", exc_info=True)

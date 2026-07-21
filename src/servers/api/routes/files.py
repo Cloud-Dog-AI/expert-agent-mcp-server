@@ -87,11 +87,13 @@ class IngestFileToKnowledgeRequest(BaseModel):
 
 
 def _read_text_file(path: str) -> str:
+    """Read a stored file as strict UTF-8 text."""
     # Strict: only text decode; fail fast on binary inputs.
     return _fs.read_bytes(path).decode("utf-8")
 
 
 def _resolve_stored_file_path(path: str) -> str:
+    """Resolve a stored relative path against the service working directory."""
     raw_path = (path or "").strip()
     if not raw_path:
         return raw_path
@@ -101,6 +103,7 @@ def _resolve_stored_file_path(path: str) -> str:
 
 
 def _create_staged_upload_path(manager: MultimediaManager, filename: str, prefix: str) -> tuple[str, str]:
+    """Create a sanitized, service-owned staging path for an upload."""
     safe_filename = sanitize_filename(filename)
     if not safe_filename:
         raise HTTPException(status_code=422, detail="filename is required")
@@ -113,6 +116,7 @@ def _create_staged_upload_path(manager: MultimediaManager, filename: str, prefix
 
 
 def _parse_file_metadata(metadata_json: Optional[str]) -> Dict[str, Any]:
+    """Parse persisted file metadata into a safe dictionary."""
     if not metadata_json:
         return {}
     try:
@@ -123,6 +127,7 @@ def _parse_file_metadata(metadata_json: Optional[str]) -> Dict[str, Any]:
 
 
 def _file_response_payload(record: Any) -> Dict[str, Any]:
+    """Serialize a file record for the Web/API response contract."""
     metadata = _parse_file_metadata(getattr(record, "metadata_json", None))
     file_path = str(getattr(record, "file_path", "") or "")
     filename = metadata.get("original_filename") or os.path.basename(file_path) or None

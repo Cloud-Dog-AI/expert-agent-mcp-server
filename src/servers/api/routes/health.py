@@ -62,6 +62,7 @@ _BUILD_INFO_FILE = Path("/app/build-info.json")
 
 
 def _app_version() -> str:
+    """Resolve the deployed application version from build metadata or config."""
     if _BUILD_INFO_FILE.exists():
         try:
             v = json.loads(_BUILD_INFO_FILE.read_text(encoding="utf-8")).get("version")
@@ -78,12 +79,14 @@ _fs = _PlatformLocalStorage(root_path="/")
 
 
 def _safe_percent(numerator: float, denominator: float) -> float:
+    """Calculate a bounded division result without a zero-denominator error."""
     if denominator <= 0:
         return 0.0
     return round((numerator / denominator) * 100.0, 2)
 
 
 def _build_status_payload(db: Session) -> Dict[str, Any]:
+    """Build the authenticated operational-status response payload."""
     uptime_seconds = int(max(0, time.time() - _START_TIME))
     memory_mb = 0.0
     memory_percent = 0.0

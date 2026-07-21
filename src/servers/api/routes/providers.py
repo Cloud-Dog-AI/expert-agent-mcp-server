@@ -23,16 +23,16 @@ live discovery (EXPWEB-017/018/031/032). Backed by the service ``llm`` /
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict, List, Optional
 
-import httpx
+from cloud_dog_logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.config.loader import get_config
+from src.core.http import get_shared_async_client
 from src.servers.api.auth import require_permission
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Read-only discovery: gated on the same read scope the Experts form already holds.
 router = APIRouter(
@@ -48,6 +48,7 @@ def _provider_entries() -> List[Dict[str, Any]]:
     seen: set[str] = set()
 
     def add(pid: str, name: str, ptype: str, base_url: Optional[str], primary: bool) -> None:
+        """Append one unique, non-empty provider discovery record."""
         key = pid.lower()
         if not key or key in seen:
             return
@@ -83,6 +84,7 @@ def _provider_entries() -> List[Dict[str, Any]]:
 
 
 def _find_provider(provider_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve a configured provider by its identifier or provider type."""
     key = str(provider_id or "").strip().lower()
     for entry in _provider_entries():
         if entry["id"].lower() == key or entry["type"].lower() == key:
@@ -93,10 +95,10 @@ def _find_provider(provider_id: str) -> Optional[Dict[str, Any]]:
 async def _ollama_models(base_url: str) -> List[Dict[str, Any]]:
     """Query an Ollama endpoint's ``/api/tags`` and normalise to ProviderModelRecord."""
     url = base_url.rstrip("/") + "/api/tags"
-    async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        payload = resp.json()
+    client = get_shared_async_client(timeout=20.0)
+    resp = await client.get(url)
+    resp.raise_for_status()
+    payload = resp.json()
     models: List[Dict[str, Any]] = []
     for item in payload.get("models", []) or []:
         name = str(item.get("name") or item.get("model") or "").strip()

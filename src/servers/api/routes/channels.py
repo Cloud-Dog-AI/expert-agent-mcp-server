@@ -44,6 +44,7 @@ from src.database.connection import get_db
 from src.core.audit.logger import log_audit_event
 from src.core.channel.manager import ChannelManager
 from src.core.llm.manager import LLMManager
+from src.core.http import get_shared_async_client
 from src.core.session.manager import SessionManager
 from src.core.job.manager import JobManager
 from src.database.models import Channel, ExpertConfig, User
@@ -56,7 +57,6 @@ from src.core.cache_integration import (
     cached_expert_query_response,
 )
 from src.servers.api.auth import require_permission, verify_api_key
-import requests
 
 logger = get_logger(__name__)
 
@@ -327,7 +327,7 @@ def _build_async_timeout_fallback(message: str, channel_id: int) -> Dict[str, An
     }
 
 
-def _send_webhook_callback(webhook_url: str, payload: Dict[str, Any]) -> None:
+async def _send_webhook_callback(webhook_url: str, payload: Dict[str, Any]) -> None:
     """Best-effort webhook callback for async channel jobs."""
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     signature_header = get_config("test.webhook_signature_header")
@@ -339,7 +339,9 @@ def _send_webhook_callback(webhook_url: str, payload: Dict[str, Any]) -> None:
         headers[str(signature_header)] = f"{signature_prefix}{digest}"
     try:
         webhook_timeout = float(get_config("queue.webhook_timeout_seconds") or 10)
-        requests.post(webhook_url, data=body, headers=headers, timeout=webhook_timeout)
+        client = get_shared_async_client(timeout=webhook_timeout)
+        response = await client.post(webhook_url, content=body, headers=headers)
+        response.raise_for_status()
     except Exception as exc:
         logger.warning(f"Webhook callback failed for {webhook_url}: {exc}")
 
@@ -622,7 +624,7 @@ async def _process_channel_chat_job(
             metadata=merged_metadata,
         )
         if webhook_url:
-            _send_webhook_callback(
+            await _send_webhook_callback(
                 webhook_url=webhook_url,
                 payload={
                     "job_id": job_id,
@@ -640,7 +642,7 @@ async def _process_channel_chat_job(
         except Exception:
             pass
         if webhook_url:
-            _send_webhook_callback(
+            await _send_webhook_callback(
                 webhook_url=webhook_url,
                 payload={
                     "job_id": job_id,

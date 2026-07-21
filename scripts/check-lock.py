@@ -29,21 +29,35 @@ def direct_deps() -> set[str]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        name = re.split(r"[<>=!~ \[;]", line, 1)[0]
+        name = re.split(r"[<>=!~ \[;]", line, maxsplit=1)[0]
         if name:
             deps.add(norm(name))
     return deps
 
 
-def locked_pins() -> set[str]:
-    pins = set()
+def locked_pins() -> dict[str, str]:
+    pins = {}
     for line in (ROOT / "requirements.lock").read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", line)
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^ ;]+)", line)
         if m:
-            pins.add(norm(m.group(1)))
+            pins[norm(m.group(1))] = m.group(2)
+    return pins
+
+
+def exact_platform_requirements() -> dict[str, str]:
+    pins = {}
+    for line in (ROOT / "requirements.txt").read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^(cloud[_-]dog[_-][A-Za-z0-9._-]+)==([^ ;]+)$", line)
+        if match:
+            pins[norm(match.group(1))] = match.group(2)
+        elif norm(re.split(r"[<>=!~ \[;]", line, maxsplit=1)[0]).startswith("cloud-dog"):
+            raise ValueError(f"Cloud-Dog requirement is not exact-pinned: {line}")
     return pins
 
 
@@ -73,13 +87,21 @@ def main() -> int:
     print(f"LEAKS: {leaks or 'none'}")
 
     # The cloud-dog platform packages MUST be pinned in the lock.
-    platform = sorted(d for d in direct if d.startswith("cloud-dog"))
+    platform_requirements = exact_platform_requirements()
+    platform = sorted(platform_requirements)
     unpinned_platform = [p for p in platform if p not in pins]
+    platform_mismatches = [
+        f"{name}: requirement={version}, lock={pins.get(name, 'missing')}"
+        for name, version in sorted(platform_requirements.items())
+        if pins.get(name) != version
+    ]
     print(f"platform packages pinned: {sorted(p for p in platform if p in pins)}")
     if unpinned_platform:
         print(f"UNPINNED PLATFORM PACKAGES: {unpinned_platform}")
+    if platform_mismatches:
+        print(f"PLATFORM VERSION MISMATCHES: {platform_mismatches}")
 
-    ok = not missing and not leaks and not unpinned_platform
+    ok = not missing and not leaks and not unpinned_platform and not platform_mismatches
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

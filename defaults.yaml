@@ -41,10 +41,11 @@ web_server:
   max_concurrent_proxy: 5
   # W28A-729-R5 flat-login demo roles. admin uses the bootstrap admin creds
   # (CLOUD_DOG__EXPERT__WEB_SERVER__USERNAME/PASSWORD). read-write -> backend
-  # role "user"; read-only -> backend role "viewer". Seeded via the user-
-  # management path at API startup. Passwords resolve from these keys, else the
-  # in-code demo default, else CLOUD_DOG__EXPERT__WEB_SERVER__READ_WRITE_PASSWORD
-  # / __READ_ONLY_PASSWORD (no password literal committed here).
+  # role "user"; read-only -> backend role "viewer". Seeded at API startup.
+  # Passwords resolve from read_write_password / read_only_password (or the
+  # CLOUD_DOG__EXPERT__WEB_SERVER__READ_WRITE_PASSWORD / __READ_ONLY_PASSWORD
+  # env keys); when unset they fall back to the resolved admin password
+  # (W28A-SEC-R17 / CDP-SEC-006 — no password literal committed here).
   read_write_username: "read-write"
   read_write_password: ""
   read_only_username: "read-only"
@@ -117,8 +118,8 @@ service_composition:
 # Keys are resolved at runtime by ServiceCompositionManager._resolve_credential
 # as service_credentials.<external_service_name>.api_key when the ExternalService
 # row carries no literal value. Real values are injected via
-# CLOUD_DOG__EXPERT__SERVICE_CREDENTIALS__<NAME>__API_KEY env vars bound to
-# a platform secret-store reference — secrets stay in the secret store, never
+# CLOUD_DOG__EXPERT__SERVICE_CREDENTIALS__<NAME>__API_KEY env vars bound to a
+# platform secret-store reference — secrets stay in the secret store, never
 # in defaults.yaml or the external_services table.
 service_credentials: {}
 
@@ -235,7 +236,10 @@ test:
 # Security settings
 auth:
   provider: "local"
-  jwt_secret: "dev-only-placeholder-jwt-secret"
+  # Empty by default (no committed secret). Supplied at runtime from the
+  # deployment env as security.jwt_secret (CLOUD_DOG__EXPERT__SECURITY__JWT_SECRET),
+  # which the config loader wires onto auth.jwt_secret when this is unset.
+  jwt_secret: ""
   session_timeout_minutes: 60
   password_min_length: 8
   password_require_complexity: true
@@ -247,6 +251,10 @@ auth:
 # Security settings (audit signing)
 security:
   audit_secret_key: "dev-only-placeholder-audit-secret"
+  # JWT signing secret, supplied at runtime from the deployment env
+  # (CLOUD_DOG__EXPERT__SECURITY__JWT_SECRET). Empty here = no committed secret;
+  # the loader wires it onto auth.jwt_secret.
+  jwt_secret: ""
 
 # Redis defaults (queue/caching)
 redis:

@@ -25,13 +25,14 @@ Related Architecture: SE1.3
 Related Tests: ST1.4
 
 Recent Changes:
+- 2026-07-16: Preserve naive-UTC audit timestamps using Python 3.13-safe APIs
 - Initial implementation
 """
 
 import json
 import hashlib
 import hmac
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 
@@ -217,7 +218,7 @@ class AuditLogger:
 
         # Use an explicit timestamp we can later verify (do NOT rely on DB server_default).
         # MariaDB stores DateTime without microseconds by default, so normalise here.
-        created_at = datetime.utcnow().replace(microsecond=0)
+        created_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
 
         # Create signature
         signature_data = f"{kind}:{ref}:{actor}:{event_data}:{created_at.isoformat()}"

@@ -35,5 +35,15 @@ WEB_PROBE_HOST="$(normalise_probe_host "$WEB_HOST")"
 
 # Run both probes in parallel to stay within Docker --timeout=45s.
 curl --max-time 15 --noproxy '*' -fsS "http://${API_PROBE_HOST}:${API_PORT}/health" >/dev/null &
+API_PROBE_PID=$!
 curl --max-time 15 --noproxy '*' -fsS "http://${WEB_PROBE_HOST}:${WEB_PORT}/health" >/dev/null &
-wait
+WEB_PROBE_PID=$!
+
+# A bare `wait` can reap all children without preserving every failing status.
+# Capture both results explicitly so a partially started container is unhealthy.
+API_PROBE_OK=0
+WEB_PROBE_OK=0
+if wait "$API_PROBE_PID"; then API_PROBE_OK=1; fi
+if wait "$WEB_PROBE_PID"; then WEB_PROBE_OK=1; fi
+test "$API_PROBE_OK" -eq 1
+test "$WEB_PROBE_OK" -eq 1

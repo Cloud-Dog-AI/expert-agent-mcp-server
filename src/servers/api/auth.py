@@ -130,6 +130,28 @@ def _validate_api_key_user(x_api_key: str, db: Session) -> Optional[User]:
     return user
 
 
+def _validate_bearer_user(token: str, db: Session) -> Optional[User]:
+    """Resolve a JWT bearer token to an enabled local user.
+
+    The API and MCP transports share this validator so browser-session traffic
+    forwarded by the Web BFF is authenticated against exactly the same user
+    and token contract as ordinary API requests.
+    """
+    try:
+        # Resolve from the current config chain. This keeps validation correct
+        # after sanctioned env/config reloads and matches TokenManager issuance.
+        claims = _build_token_service().verify(token)
+    except TokenError:
+        return None
+    user_id = claims.get("user_id", claims.get("sub"))
+    try:
+        user_id_int = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    user = db.query(User).filter(User.id == user_id_int).first()
+    return user if user and user.enabled else None
+
+
 async def verify_api_key(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
@@ -159,25 +181,11 @@ async def verify_api_key(
 
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        try:
-            claims = _TOKEN_SERVICE.verify(token)
-        except TokenError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
-            )
-        user_id = claims.get("user_id", claims.get("sub"))
-        try:
-            user_id_int = int(user_id)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
-            )
-        user = db.query(User).filter(User.id == user_id_int).first()
-        if user and user.enabled:
+        user = _validate_bearer_user(token, db)
+        if user:
             return user
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token not associated with an active user",
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
         )
 
     raise HTTPException(

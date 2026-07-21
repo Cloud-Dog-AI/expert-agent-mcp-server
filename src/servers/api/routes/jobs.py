@@ -31,7 +31,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -56,6 +56,7 @@ _CANCELLABLE = {
     "blocked",
     "paused",
     "pending",
+    "retry_wait",
 }
 _RETRYABLE = {"failed", "cancelled", "timed_out", "timeout", "dead_lettered"}
 _TERMINAL = {
@@ -70,14 +71,27 @@ _TERMINAL = {
     "archived",
 }
 _ACTIVE = {"running", "processing", "dispatched"}
-_QUEUED = {"created", "validated", "queued", "scheduled", "pending"}
+_QUEUED = {"created", "validated", "queued", "scheduled", "pending", "retry_wait"}
 
 
 class ResubmitJobRequest(BaseModel):
     priority: Optional[int] = 0
 
 
+class CreateJobRequest(BaseModel):
+    job_type: str
+    status: str = "queued"
+    user_id: Optional[int] = None
+    session_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    prompt_sent: Optional[str] = None
+    response_received: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    error_info: Optional[Dict[str, Any]] = None
+
+
 def _safe_json(raw: Optional[str]) -> Dict[str, Any]:
+    """Decode an optional JSON object, returning an empty object on invalid input."""
     if not raw:
         return {}
     try:
@@ -88,10 +102,59 @@ def _safe_json(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def _normalise_status(value: Optional[str]) -> str:
+    """Return the canonical lowercase representation of a job status."""
     return str(value or "unknown").strip().lower()
 
 
+def _is_admin(user: User) -> bool:
+    """Return whether the supplied user has the administrator role."""
+    return str(getattr(user, "role", "") or "").strip().lower() == "admin"
+
+
+def _actor_identity(
+    job: Job,
+    metadata: Dict[str, Any],
+    db: Optional[Session],
+) -> Optional[str]:
+    """Resolve the recorded job actor from metadata or the persisted user."""
+    for key in ("actor", "request_auth_identity", "username", "user"):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if job.user_id is not None and db is not None:
+        actor = db.query(User).filter(User.id == job.user_id).first()
+        if actor:
+            return actor.username
+    return str(job.user_id) if job.user_id is not None else None
+
+
+def _job_owned_by(job: Job, user: User) -> bool:
+    """Return whether a job's persisted identifiers belong to a user."""
+    if job.user_id is not None and int(job.user_id) == int(user.id):
+        return True
+    metadata = _safe_json(job.metadata_json)
+    identities = {
+        str(getattr(user, "id", "") or "").strip().lower(),
+        str(getattr(user, "username", "") or "").strip().lower(),
+        str(getattr(user, "email", "") or "").strip().lower(),
+        str(getattr(user, "display_name", "") or "").strip().lower(),
+    }
+    identities.discard("")
+    return any(
+        str(metadata.get(key) or "").strip().lower() in identities
+        for key in ("actor", "request_auth_identity", "username", "user", "user_id")
+    )
+
+
+def _ensure_job_access(job: Job, user: User) -> None:
+    """Reject access unless the user is an administrator or owns the job."""
+    if _is_admin(user) or _job_owned_by(job, user):
+        return
+    raise HTTPException(status_code=403, detail="Job access denied")
+
+
 def _started_at(job: Job, metadata: Dict[str, Any], call_logs: list[dict[str, Any]]) -> Optional[str]:
+    """Resolve a job start timestamp from metadata or its first call log."""
     started = metadata.get("started_at") or metadata.get("start_time")
     if started:
         return str(started)
@@ -101,6 +164,7 @@ def _started_at(job: Job, metadata: Dict[str, Any], call_logs: list[dict[str, An
 
 
 def _priority(metadata: Dict[str, Any]) -> int:
+    """Parse the optional numeric job priority with a safe default."""
     try:
         return int(metadata.get("priority", 0))
     except (TypeError, ValueError):
@@ -108,6 +172,7 @@ def _priority(metadata: Dict[str, Any]) -> int:
 
 
 def _attempt(metadata: Dict[str, Any]) -> int:
+    """Parse the current one-based retry attempt from job metadata."""
     try:
         return max(1, int(metadata.get("attempt", metadata.get("retry_attempt", 1))))
     except (TypeError, ValueError):
@@ -115,6 +180,7 @@ def _attempt(metadata: Dict[str, Any]) -> int:
 
 
 def _max_attempts(metadata: Dict[str, Any]) -> int:
+    """Resolve the positive retry limit from metadata and platform config."""
     try:
         config_default = int(get_config("queue.max_retries") or 3)
     except (TypeError, ValueError):
@@ -126,6 +192,7 @@ def _max_attempts(metadata: Dict[str, Any]) -> int:
 
 
 def _duration_seconds(job: Job, metadata: Dict[str, Any], performance_metrics: Dict[str, Any], started_at: Optional[str]) -> Optional[float]:
+    """Calculate job duration from latency metrics or persisted timestamps."""
     latency_ms = performance_metrics.get("latency_ms")
     try:
         latency_ms_float = float(latency_ms)
@@ -152,6 +219,7 @@ def _duration_seconds(job: Job, metadata: Dict[str, Any], performance_metrics: D
 
 
 def _outcome_text(job: Job, error_info: Dict[str, Any]) -> Optional[str]:
+    """Build a concise outcome summary from error details or response text."""
     for key in ("message", "detail", "error", "reason"):
         value = error_info.get(key)
         if value not in (None, ""):
@@ -161,7 +229,48 @@ def _outcome_text(job: Job, error_info: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _serialise_job(job_manager: JobManager, job: Job) -> Dict[str, Any]:
+def _lifecycle_log(
+    job: Job,
+    metadata: Dict[str, Any],
+    started_at: Optional[str],
+    actor: Optional[str],
+) -> list[Dict[str, Any]]:
+    """Return an explicit or derived chronological job lifecycle log."""
+    explicit_log = metadata.get("lifecycle_log")
+    if isinstance(explicit_log, list):
+        return [entry for entry in explicit_log if isinstance(entry, dict)]
+    entries = [
+        {
+            "timestamp": job.created_at.isoformat() if job.created_at else None,
+            "from_state": None,
+            "to_state": "created",
+            "actor": actor,
+            "message": "Job record created",
+        },
+        {
+            "timestamp": started_at,
+            "from_state": "queued",
+            "to_state": "running",
+            "actor": actor,
+            "message": "Job dispatch started",
+        },
+        {
+            "timestamp": job.updated_at.isoformat() if job.updated_at else None,
+            "from_state": None,
+            "to_state": job.status,
+            "actor": actor,
+            "message": "Latest state update",
+        },
+    ]
+    return [entry for entry in entries if entry["timestamp"]]
+
+
+def _serialise_job(
+    job_manager: JobManager,
+    job: Job,
+    db: Optional[Session] = None,
+) -> Dict[str, Any]:
+    """Serialize a persisted job and its related runtime metadata for the API."""
     metadata = _safe_json(job.metadata_json)
     performance_metrics = _safe_json(job.performance_metrics_json)
     vector_context = _safe_json(job.vector_context_json)
@@ -182,6 +291,22 @@ def _serialise_job(job_manager: JobManager, job: Job) -> Dict[str, Any]:
     ]
     started_at = _started_at(job, metadata, call_logs)
     duration_seconds = _duration_seconds(job, metadata, performance_metrics, started_at)
+    actor = _actor_identity(job, metadata, db)
+    result_ref = (
+        metadata.get("result_ref")
+        or metadata.get("result_url")
+        or metadata.get("output_ref")
+        or metadata.get("queue_job_id")
+        or metadata.get("mcp_platform_job_id")
+    )
+    trace_id = (
+        metadata.get("trace_id")
+        or metadata.get("traceparent")
+        or metadata.get("correlation_id")
+    )
+    request_arguments = metadata.get("request_arguments")
+    if not isinstance(request_arguments, dict):
+        request_arguments = {}
 
     return {
         "id": job.id,
@@ -196,6 +321,8 @@ def _serialise_job(job_manager: JobManager, job: Job) -> Dict[str, Any]:
         "request_source": metadata.get("request_source"),
         "auth_method": metadata.get("auth_method"),
         "correlation_id": metadata.get("correlation_id"),
+        "trace_id": trace_id,
+        "actor": actor,
         "session_id": job.session_id,
         "channel_id": job.channel_id,
         "user_id": job.user_id,
@@ -203,9 +330,25 @@ def _serialise_job(job_manager: JobManager, job: Job) -> Dict[str, Any]:
         "response_received": job.response_received,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "started_at": started_at,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "finished_at": job.completed_at.isoformat() if job.completed_at else None,
         "duration_seconds": duration_seconds,
         "outcome": _outcome_text(job, error_info),
+        "outcome_summary": _outcome_text(job, error_info),
+        "result_ref": result_ref,
+        "last_error": error_info or None,
+        "input_ref": {
+            "session_id": job.session_id,
+            "channel_id": job.channel_id,
+            "request_source": metadata.get("request_source"),
+            "auth_method": metadata.get("auth_method"),
+            "correlation_id": metadata.get("correlation_id"),
+            "trace_id": trace_id,
+        },
+        "parameters": request_arguments,
+        "thinking": metadata.get("thinking") or metadata.get("reasoning_trace"),
+        "lifecycle_log": _lifecycle_log(job, metadata, started_at, actor),
         "metadata": metadata,
         "performance_metrics": performance_metrics,
         "vector_context": vector_context,
@@ -225,6 +368,7 @@ def _log_job_mutation(
     db: Session,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """Persist a structured audit record for a job mutation."""
     log_audit_event(
         kind=f"job.{action}",
         ref=str(job.id),
@@ -247,9 +391,83 @@ def _log_job_mutation(
 
 
 async def _cancel_job(job_manager: JobManager, queue_manager: QueueManager, job: Job) -> bool:
+    """Cancel a queued job and persist its terminal status."""
     removed = await queue_manager.cancel_job(job.id)
     job_manager.update_job(job.id, status="cancelled")
     return removed
+
+
+def _actor_for_user_id(db: Session, user_id: Optional[int], fallback: User) -> str:
+    """Resolve a requested actor username or use the authenticated fallback."""
+    if user_id is not None:
+        actor = db.query(User).filter(User.id == user_id).first()
+        if actor:
+            return actor.username
+    return fallback.username
+
+
+@router.post("")
+async def create_job(
+    payload: CreateJobRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verify_jobs_write),
+) -> Dict[str, Any]:
+    """Create a source-backed job record for authenticated job workflows."""
+    status_value = _normalise_status(payload.status)
+    allowed_statuses = _TERMINAL | _ACTIVE | _QUEUED | {
+        "blocked",
+        "paused",
+        "validated",
+    }
+    if status_value not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported job status '{payload.status}'.",
+        )
+
+    target_user_id = payload.user_id if _is_admin(current_user) else int(current_user.id)
+    actor = _actor_for_user_id(db, target_user_id, current_user)
+    metadata = dict(payload.metadata or {})
+    metadata.update(
+        {
+            "actor": actor,
+            "request_auth_identity": actor,
+            "request_source": metadata.get("request_source") or "api.jobs.create",
+            "created_by": current_user.username,
+        }
+    )
+    if status_value in _ACTIVE or status_value in _TERMINAL:
+        metadata.setdefault("started_at", datetime.utcnow().isoformat())
+
+    job_manager = JobManager(db)
+    job = job_manager.create_job(
+        job_type=payload.job_type,
+        session_id=payload.session_id,
+        channel_id=payload.channel_id,
+        user_id=target_user_id,
+        prompt_sent=payload.prompt_sent,
+        metadata=metadata,
+    )
+    job_manager.update_job(
+        job.id,
+        status=status_value,
+        response_received=payload.response_received,
+        error_info=payload.error_info,
+    )
+    refreshed = job_manager.get_job(job.id) or job
+    _log_job_mutation(
+        request=request,
+        current_user=current_user,
+        job=refreshed,
+        action="created",
+        outcome="success",
+        db=db,
+        extra={"source": "api.jobs.create"},
+    )
+    response.status_code = 201
+    return _serialise_job(job_manager, refreshed, db)
 
 
 @router.get("")
@@ -261,37 +479,43 @@ async def list_jobs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(verify_jobs_read),
+    current_user: User = Depends(verify_jobs_read),
 ) -> Dict[str, Any]:
     """List jobs with filters."""
     job_manager = JobManager(db)
+    effective_user_id = user_id
+    if not _is_admin(current_user):
+        if user_id is not None and int(user_id) != int(current_user.id):
+            raise HTTPException(status_code=403, detail="Job access denied")
+        effective_user_id = int(current_user.id)
     jobs = job_manager.list_jobs(
         session_id=session_id,
         channel_id=channel_id,
-        user_id=user_id,
+        user_id=effective_user_id,
         status=status,
         limit=limit,
         offset=offset,
     )
-    job_list = [_serialise_job(job_manager, job) for job in jobs]
+    job_list = [_serialise_job(job_manager, job, db) for job in jobs]
     return {"total": len(job_list), "limit": limit, "offset": offset, "jobs": job_list}
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id:int}")
 async def get_job(
     job_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(verify_jobs_read),
+    current_user: User = Depends(verify_jobs_read),
 ) -> Dict[str, Any]:
     """Get job details."""
     job_manager = JobManager(db)
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _serialise_job(job_manager, job)
+    _ensure_job_access(job, current_user)
+    return _serialise_job(job_manager, job, db)
 
 
-@router.post("/{job_id}/cancel")
+@router.post("/{job_id:int}/cancel")
 async def cancel_job(
     job_id: int,
     request: Request,
@@ -304,6 +528,7 @@ async def cancel_job(
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _ensure_job_access(job, current_user)
 
     status = _normalise_status(job.status)
     if status not in _CANCELLABLE:
@@ -331,7 +556,7 @@ async def cancel_job(
     }
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id:int}")
 async def remove_job(
     job_id: int,
     request: Request,
@@ -347,7 +572,7 @@ async def remove_job(
 
     status = _normalise_status(job.status)
     if status in _TERMINAL:
-        snapshot = _serialise_job(job_manager, job)
+        snapshot = _serialise_job(job_manager, job, db)
         db.delete(job)
         db.commit()
         _log_job_mutation(
@@ -383,7 +608,7 @@ async def remove_job(
     raise HTTPException(status_code=400, detail=f"Cannot delete job with status '{job.status}'.")
 
 
-@router.post("/{job_id}/resubmit")
+@router.post("/{job_id:int}/resubmit")
 async def resubmit_job(
     job_id: int,
     request: ResubmitJobRequest,
@@ -397,6 +622,7 @@ async def resubmit_job(
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=400, detail="Cannot resubmit job that no longer exists.")
+    _ensure_job_access(job, current_user)
 
     status = _normalise_status(job.status)
     if status not in _RETRYABLE:
@@ -444,7 +670,7 @@ async def resubmit_job(
     }
 
 
-@router.post("/{job_id}/retry")
+@router.post("/{job_id:int}/retry")
 async def retry_job(
     job_id: int,
     request: ResubmitJobRequest,
@@ -456,7 +682,7 @@ async def retry_job(
     return await resubmit_job(job_id, request, http_request, db, current_user)
 
 
-@router.post("/{job_id}/stop")
+@router.post("/{job_id:int}/stop")
 async def stop_job(
     job_id: int,
     request: Request,
@@ -470,11 +696,14 @@ async def stop_job(
 @router.get("/queue/status")
 async def get_queue_status(
     db: Session = Depends(get_db),
-    _: User = Depends(verify_jobs_read),
+    current_user: User = Depends(verify_jobs_read),
 ) -> Dict[str, Any]:
     """Get queue status."""
     job_manager = JobManager(db)
-    jobs = job_manager.list_jobs(limit=1000)
+    jobs = job_manager.list_jobs(
+        user_id=None if _is_admin(current_user) else int(current_user.id),
+        limit=1000,
+    )
     status_counts: Dict[str, int] = {}
     failed_24h = 0
     cutoff = datetime.utcnow() - timedelta(hours=24)

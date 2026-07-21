@@ -224,6 +224,11 @@ def _project_transform(compiled: dict[str, Any]) -> dict[str, Any]:
         "llm",
         "embeddings",
         "auth",
+        # W28A-SEC-R17: surface CLOUD_DOG__EXPERT__SECURITY__* env overrides
+        # (compiled under expert.security.*) to the top-level security.* section
+        # the runtime reads. Needed so the deployment-injected security.jwt_secret
+        # reaches the auth subsystem (see the auth.jwt_secret wiring below).
+        "security",
         "smtp",
         "log",
         "vector",
@@ -247,6 +252,18 @@ def _project_transform(compiled: dict[str, Any]) -> dict[str, Any]:
             runtime_section = {}
             config[section_name] = runtime_section
         _deep_merge_dicts(runtime_section, expert_section)
+
+    # W28A-SEC-R17: the JWT signing secret is supplied by the deployment env as
+    # security.jwt_secret (CLOUD_DOG__EXPERT__SECURITY__JWT_SECRET). The auth
+    # subsystem (token signing, audit HMAC, at-rest crypto) reads auth.jwt_secret;
+    # wire the injected secret through when auth.jwt_secret is unset so the
+    # committed defaults can ship EMPTY (no committed secret) while preprod keeps
+    # signing with the real injected secret rather than a public placeholder.
+    auth_section = config.get("auth")
+    security_section = config.get("security")
+    if isinstance(auth_section, dict) and isinstance(security_section, dict):
+        if not auth_section.get("jwt_secret") and security_section.get("jwt_secret"):
+            auth_section["jwt_secret"] = security_section["jwt_secret"]
 
     api_server_cfg = config.get("api_server")
     if isinstance(api_server_cfg, dict):

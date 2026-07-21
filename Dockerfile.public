@@ -18,7 +18,7 @@
 # separately as W28A-F3x-APPLY. Per PS-97 §3.3 / §4 this Dockerfile uses a single
 # index and NEVER an --extra-index-url.
 
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.vendor="Cloud-Dog, Viewdeck Engineering Limited"
@@ -39,12 +39,13 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Public runtime CA bundle — the stock python:3.12-slim ca-certificates store is
+# Public runtime CA bundle — the stock python:3.13-slim ca-certificates store is
 # sufficient for public package indexes and ACME-issued endpoints. No private CA.
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Optional browser runtime for Selenium-driven test suites. Disabled by default.
 ARG INCLUDE_BROWSER_TOOLS=0
@@ -52,9 +53,8 @@ ARG INCLUDE_BROWSER_TOOLS=0
 # Install system dependencies.
 RUN set -e; \
     apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
-        build-essential \
-        netcat-openbsd \
         curl \
         procps \
     && if [ "$INCLUDE_BROWSER_TOOLS" = "1" ]; then \
@@ -62,12 +62,12 @@ RUN set -e; \
     fi \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache.
-COPY requirements.txt .
+# Copy the sealed Python 3.13 dependency closure first to leverage Docker cache.
+COPY requirements.lock .
 
 # Install Python dependencies from the active public index only.
-# Platform packages are pinned in requirements.txt (cloud_dog_*).
-RUN PIP_NO_INPUT=1 pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.txt
+# Platform packages and their complete transitive closure are exact-pinned.
+RUN PIP_NO_INPUT=1 pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.lock
 
 # Copy application code.
 COPY . .

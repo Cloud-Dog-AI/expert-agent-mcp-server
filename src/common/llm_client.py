@@ -179,6 +179,12 @@ class LLMClient:
         ]
 
         params: Dict[str, Any] = dict(kwargs)
+        think_value = params.pop("think", False)
+        think_budget = params.pop("think_budget", None)
+        # Private reasoning is never a service response. Callers may enable the
+        # provider's thinking mode, but cloud_dog_llm keeps it in its private
+        # reasoning channel and this compatibility boundary never requests it.
+        params.pop("include_reasoning", None)
         request_temperature: Optional[float] = None
         if self._provider_id == "ollama":
             option_params: Dict[str, Any] = {}
@@ -199,6 +205,9 @@ class LLMClient:
             temperature=request_temperature,
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             stream=bool(stream),
+            think=self._as_bool(think_value, False),
+            think_budget=int(think_budget) if think_budget is not None else None,
+            include_reasoning=False,
             params=params,
         )
 
@@ -253,9 +262,7 @@ class LLMClient:
         if self._provider_id == "ollama":
             message = payload.get("message")
             message = message if isinstance(message, dict) else {}
-            content = str(
-                message.get("content") or message.get("thinking") or payload.get("response") or ""
-            )
+            content = str(message.get("content") or payload.get("response") or "")
             eval_count = int(payload.get("eval_count") or 0)
             prompt_eval_count = int(payload.get("prompt_eval_count") or 0)
             return {
@@ -275,7 +282,7 @@ class LLMClient:
         first = first if isinstance(first, dict) else {}
         message = first.get("message")
         message = message if isinstance(message, dict) else {}
-        content = str(message.get("content") or message.get("reasoning") or "")
+        content = str(message.get("content") or "")
         usage = payload.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         total_tokens = int(usage.get("total_tokens") or 0)
@@ -471,7 +478,10 @@ class LLMClient:
                     response = await self._platform_client.chat(request=request, session=session)
                     return self._to_legacy_response(response)
                 except Exception as err:
-                    if not self._should_retry_chat_error(err, retry_on_timeout) or attempt >= attempts:
+                    if (
+                        not self._should_retry_chat_error(err, retry_on_timeout)
+                        or attempt >= attempts
+                    ):
                         raise
                     delay = grace + (backoff * (attempt - 1))
                     logger.warning(
