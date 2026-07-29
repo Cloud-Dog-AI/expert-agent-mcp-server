@@ -4,7 +4,7 @@
 # Global settings
 app:
   name: "Expert Agent MCP Server"
-  version: "0.1.1RC1"
+  version: "0.1.1RC4"
   environment: "development"
   url: "https://expert-agent.example.com"
 
@@ -59,6 +59,11 @@ mcp_server:
   log_file: "/var/log/expert/mcp.log"
   enabled: true
   transport: "sse"
+  # Default only for async tools that do not carry their own execution budget.
+  # execute_tool requests preserve parameters.max_wall_time_seconds end to end.
+  async_job_execution_timeout_seconds: 6200
+  async_job_stale_after_seconds: 6200
+  async_job_heartbeat_seconds: 15
 
 a2a_server:
   host: "0.0.0.0"
@@ -78,6 +83,11 @@ llm:
   top_p: 0.9
   max_tokens: 1024
   timeout: 300
+  # One bounded recovery attempt for transient provider/network failures.
+  chat_retries: 1
+  retry_grace_seconds: 1.0
+  retry_backoff_seconds: 2.0
+  retry_on_read_timeout: true
   default_system_prompt: |
     You are a helpful expert assistant. Provide accurate, concise, and context-appropriate responses. 
     Use technical language when appropriate but ensure clarity for all users.

@@ -404,14 +404,10 @@ class ConnectionManager:
 
 
 class A2AMutationAuthMiddleware:
-    """Require an authenticated principal for A2A mutation surfaces.
+    """Require identity for A2A discovery, event and execution surfaces."""
 
-    Discovery, health, topic listing, and event reads remain public. HTTP
-    mutations and WebSocket command channels accept the same configured or
-    user-backed API keys and bearer tokens as the MCP transport.
-    """
-
-    _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+    _OPEN_PATHS = {"/health", "/a2a/health", "/ready", "/live"}
+    _EXECUTION_ROLES = {"admin", "user", "operator"}
 
     def __init__(self, app):
         self.app = app
@@ -419,22 +415,43 @@ class A2AMutationAuthMiddleware:
     async def __call__(self, scope, receive, send):
         scope_type = scope.get("type")
         if scope_type == "http":
-            method = str(scope.get("method") or "GET").upper()
-            if method not in self._SAFE_METHODS and not self._authenticate(scope):
-                return await self._send_401(send)
-        elif scope_type == "websocket" and not self._authenticate(scope):
-            await send(
-                {
-                    "type": "websocket.close",
-                    "code": 4401,
-                    "reason": "Authentication required",
-                }
-            )
-            return
+            path = (scope.get("path") or "/").rstrip("/") or "/"
+            if path not in self._OPEN_PATHS:
+                principal = self._authenticate(scope)
+                if principal is None:
+                    return await self._send_denial(send, 401, "Authentication required")
+                role, _actor = principal
+                if (
+                    str(scope.get("method") or "GET").upper()
+                    not in {"GET", "HEAD", "OPTIONS"}
+                    and role not in self._EXECUTION_ROLES
+                ):
+                    return await self._send_denial(send, 403, "Insufficient role")
+        elif scope_type == "websocket":
+            principal = self._authenticate(scope)
+            if principal is None:
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 4401,
+                        "reason": "Authentication required",
+                    }
+                )
+                return
+            role, _actor = principal
+            if role not in self._EXECUTION_ROLES:
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 4403,
+                        "reason": "Insufficient role",
+                    }
+                )
+                return
         return await self.app(scope, receive, send)
 
     @staticmethod
-    def _authenticate(scope) -> bool:
+    def _authenticate(scope) -> tuple[str, str] | None:
         headers = {
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])
@@ -452,7 +469,7 @@ class A2AMutationAuthMiddleware:
                 except Exception:
                     configured = None
                 if configured and str(configured) == api_key:
-                    return True
+                    return ("admin", "expert-agent-service")
 
         authorization = headers.get("authorization", "")
         bearer = (
@@ -461,7 +478,7 @@ class A2AMutationAuthMiddleware:
             else ""
         )
         if not api_key and not bearer:
-            return False
+            return None
 
         try:
             from src.database.connection import get_db
@@ -477,18 +494,22 @@ class A2AMutationAuthMiddleware:
                 )
             finally:
                 db_gen.close()
-            return bool(user and getattr(user, "enabled", False))
+            if not user or not getattr(user, "enabled", False):
+                return None
+            role = str(getattr(user, "role", None) or "user").strip().lower()
+            actor = str(getattr(user, "id", None) or getattr(user, "username", None) or "user")
+            return (role, actor)
         except Exception as exc:  # pragma: no cover - auth resolution must fail closed
             logger.warning("A2A auth resolution error (failing closed): %s", exc)
-            return False
+            return None
 
     @staticmethod
-    async def _send_401(send) -> None:
-        payload = b'{"detail":"Authentication required"}'
+    async def _send_denial(send, status: int, detail: str) -> None:
+        payload = json.dumps({"detail": detail}, separators=(",", ":")).encode("utf-8")
         await send(
             {
                 "type": "http.response.start",
-                "status": 401,
+                "status": status,
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"content-length", str(len(payload)).encode("ascii")),

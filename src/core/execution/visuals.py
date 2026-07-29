@@ -55,6 +55,13 @@ _NE_PATH = _NE_PATH_10M if os.path.exists(_NE_PATH_10M) else _NE_PATH_50M
 # the geo service's governed limit (15000) so continental geopolitical "zone" maps render.
 _BBOX_AREA_CAP = 15000.0
 
+# GeoMCP returns an asynchronous job envelope for tall rasters.  Agentic report
+# delivery needs an inline PNG from the normal synchronous MCP response so it
+# can remain a self-contained CID attachment.  Keep the source-model's bbox and
+# map content unchanged, but scale the presentation raster proportionally below
+# the observed synchronous response boundary.
+_SYNC_MAP_MAX_HEIGHT = 1400
+
 # shapely is optional: it is only needed to clip a rough control polygon to a country's
 # real coastline. If it is absent (e.g. the pure-UT venv) we fall back to the unclipped
 # polygon rather than failing the whole figure.
@@ -251,6 +258,11 @@ def _control_layers(control: List[Dict[str, Any]], clip_country: Optional[str]) 
             except Exception:
                 clip_geom = None
     for c in control or []:
+        if not isinstance(c, dict):
+            # A model-authored plan may put a stray token here (e.g. "zoom").
+            # One malformed optional overlay must not abort the whole map render.
+            logger.warning("visuals: ignoring non-dict control entry %r", c)
+            continue
         coords = c.get("coords") or c.get("coordinates")
         if not coords:
             continue
@@ -281,7 +293,7 @@ def _title_layer(text: str, bbox: List[float]) -> Dict[str, Any]:
 
 
 def _legend_layer(items: List[Dict[str, Any]], height: int, x: int = 12) -> Dict[str, Any]:
-    items = [{**it, "label": _ascii(it.get("label", ""))} for it in (items or [])]
+    items = [{**it, "label": _ascii(it.get("label", ""))} for it in (items or []) if isinstance(it, dict)]
     return {"type": "legend", "x": x, "y": int(height - 22 - 16 * len(items)), "items": items}
 
 
@@ -507,13 +519,17 @@ def _focus_outline_layers(focus: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
-def _scale_date_layers(bbox: List[float], map_date: Optional[str]) -> List[Dict[str, Any]]:
-    """A geographic scale bar (bottom-left) and a map-date stamp (bottom-right).
+def _scale_date_layers(
+    bbox: List[float], map_date: Optional[str], attribution: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return the map scale, date and configured source attribution labels.
 
     The scale bar is drawn in EPSG:4326 layer coordinates: a horizontal line whose ground
     length is a 'nice' round number of km at the map-centre latitude, plus a '<n> km' label.
-    Returns [] when the bbox is degenerate. Attribution is added by the geo renderer from the
-    basemap catalogue, so this covers the remaining acceptance-check furniture (scale + date).
+    A source attribution is passed explicitly from the product visual configuration rather than
+    assumed from a renderer implementation: the rendered artefact must carry the provider
+    credit even when a remote Geo renderer does not add one itself. Returns [] when the bbox is
+    degenerate.
     """
     try:
         midlat = (bbox[1] + bbox[3]) / 2.0
@@ -536,6 +552,14 @@ def _scale_date_layers(bbox: List[float], map_date: Optional[str]) -> List[Dict[
         if map_date:
             out.append({"type": "label", "at": [bbox[2] - abs(bbox[2] - bbox[0]) * 0.24, y0],
                         "text": _ascii("Map date %s UTC" % map_date), "colour": [30, 30, 40]})
+        if attribution:
+            out.append({
+                "type": "label",
+                "at": [bbox[0] + abs(bbox[2] - bbox[0]) * 0.36,
+                       y0 + abs(bbox[3] - bbox[1]) * 0.012],
+                "text": _ascii(str(attribution)),
+                "colour": [30, 30, 40],
+            })
         return out
     except Exception:
         return []
@@ -591,7 +615,13 @@ async def _render_one_map(
         layers.extend(backdrop)
     layers.extend(_control_layers(spec.get("control") or [], spec.get("focus_country")))
     for ln in spec.get("lines") or []:
-        coords = ln.get("coords") or ln.get("coordinates") or ln
+        if isinstance(ln, dict):
+            coords = ln.get("coords") or ln.get("coordinates")
+        elif isinstance(ln, list):
+            coords = ln
+        else:
+            logger.warning("visuals: ignoring non-dict line entry %r", ln)
+            continue
         if isinstance(coords, list) and coords:
             layers.append(_line_layer(coords, tuple(ln.get("colour", (200, 40, 40))) if isinstance(ln, dict) else (200, 40, 40),
                                       int(ln.get("width", 4)) if isinstance(ln, dict) else 4))
@@ -604,12 +634,31 @@ async def _render_one_map(
     if spec.get("title"):
         layers.append(_title_layer(str(spec["title"]), bbox))
 
-    # Scale bar + map-date furniture (drawn in geographic coords) so a basemap-backed map
-    # carries its full cartographic furniture; the geo renderer adds basemap attribution.
+    # Scale bar, date and explicit source attribution are drawn in geographic coordinates. The
+    # visual configuration owns the attribution so the report remains source-complete even when
+    # a remote Geo renderer does not add a provider credit.
     if basemap:
-        layers.extend(_scale_date_layers(bbox, spec.get("map_date")))
+        layers.extend(
+            _scale_date_layers(
+                bbox,
+                spec.get("map_date"),
+                spec.get("attribution"),
+            )
+        )
+    if spec.get("north_arrow"):
+        layers.append({"type": "north_arrow"})
 
     height = _aspect_height(bbox, width)
+    if height > _SYNC_MAP_MAX_HEIGHT:
+        # Preserve geographic aspect rather than clipping or changing the
+        # model-authored extent.  This is a renderer transport constraint, not
+        # a visual-data repair: the same bbox, layers, legend and map rationale
+        # are passed to GeoMCP at a delivery-safe raster size.
+        width = max(1, int(width * _SYNC_MAP_MAX_HEIGHT / height))
+        height = _aspect_height(bbox, width)
+        while height > _SYNC_MAP_MAX_HEIGHT and width > 1:
+            width -= 1
+            height = _aspect_height(bbox, width)
     legend_items = spec.get("legend") or []
     if legend_items:
         layers.append(_legend_layer(legend_items, height))
@@ -1137,20 +1186,46 @@ async def _render_chart_from_sql(
 ) -> Optional[str]:
     """Query the SQL agent for a chart's real data, then render it locally. Returns the
     base64 PNG or None (no rows / render failure) so the report still sends."""
-    question = spec.get("sql")
-    if not question:
+    configured_queries = spec.get("sql_queries")
+    if isinstance(configured_queries, str):
+        questions = [configured_queries]
+    elif isinstance(configured_queries, list):
+        questions = [str(question).strip() for question in configured_queries if str(question).strip()]
+    else:
+        question = spec.get("sql")
+        questions = [str(question).strip()] if str(question or "").strip() else []
+    if not questions:
         return None
-    args: Dict[str, Any] = {"question": str(question),
-                            "agent_strategy": str(spec.get("sql_strategy") or "simple")}
-    if spec.get("sql_profile"):
-        args["profile"] = str(spec["sql_profile"])
-    try:
-        raw = await dispatch_service(sql_service, "query_database_async_blocking", args)
-    except Exception as exc:
-        logger.warning("visuals: sql chart %r query failed: %s", spec.get("id"), exc)
-        return None
-    rows = _sql_rows(raw)
-    if not rows:
+    rows: List[List[Any]] = []
+    # SQL Agent's documented long synchronous tool returns the source-backed
+    # result (and profile-audit trailer) directly. Its async-blocking wrapper
+    # has no usable result response in the deployed contract. Multiple simple
+    # queries are a schedule-configured compatibility shape for governed agents
+    # that cannot translate one long multi-country question reliably; the code
+    # never supplies a country, metric, or factual value itself.
+    for question in questions:
+        args: Dict[str, Any] = {
+            "question": question,
+            "agent_strategy": str(spec.get("sql_strategy") or "simple"),
+        }
+        if spec.get("sql_profile"):
+            args["profile"] = str(spec["sql_profile"])
+        try:
+            raw = await dispatch_service(
+                sql_service,
+                str(spec.get("sql_tool") or "query_database_long"),
+                args,
+            )
+        except Exception as exc:
+            logger.warning("visuals: sql chart %r query failed: %s", spec.get("id"), exc)
+            return None
+        query_rows = _sql_rows(raw)
+        if not query_rows:
+            logger.warning("visuals: sql chart %r returned no rows; skipping", spec.get("id"))
+            return None
+        rows.extend(query_rows)
+    minimum_rows = max(1, int(spec.get("min_sql_rows") or 1))
+    if len(rows) < minimum_rows:
         logger.warning("visuals: sql chart %r returned no rows; skipping", spec.get("id"))
         return None
     cspec = _chart_spec_from_sql_rows(spec, rows)
@@ -1320,6 +1395,26 @@ async def render_visuals(
         # CID must be a simple token usable in src="cid:..."; fold to a safe slug.
         return "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in _ascii(cid)) or f"{prefix}{seq}"
 
+    def _copy_validation_metadata(
+        spec: Dict[str, Any],
+        image: Dict[str, Any],
+        figure: Dict[str, Any],
+    ) -> None:
+        """Carry model-authored visual metadata to the final delivery gate."""
+        for key in (
+            "kind",
+            "map_date",
+            "attribution",
+            "uncertainty",
+            "legend",
+            "north_arrow",
+            "scale_bar",
+        ):
+            value = spec.get(key)
+            if value not in (None, "", [], {}):
+                image[key] = value
+                figure[key] = value
+
     def _emit_reference(spec: Dict[str, Any], prefix: str, reference: Dict[str, Any]) -> None:
         cid = _cid(spec, prefix)
         image: Dict[str, Any] = {
@@ -1337,18 +1432,53 @@ async def render_visuals(
         for key in ("asset_id", "size_bytes", "expires_at", "storage_backend"):
             if reference.get(key) is not None:
                 image[key] = reference[key]
+        visual_class = str(spec.get("quality_class") or "").strip()
+        source_urls = spec.get("source_urls") if isinstance(spec.get("source_urls"), list) else []
+        if visual_class:
+            image["quality_class"] = visual_class
+        if source_urls:
+            image["source_urls"] = list(source_urls)
         inline_images.append(image)
-        figures.append({"content_id": cid,
-                        "caption": _ascii(spec.get("caption") or spec.get("title") or ""),
-                        "after_heading": spec.get("after")})
+        figure = {"content_id": cid,
+                  "caption": _ascii(spec.get("caption") or spec.get("title") or ""),
+                  "after_heading": spec.get("after")}
+        if visual_class:
+            figure["quality_class"] = visual_class
+        if source_urls:
+            figure["source_urls"] = list(source_urls)
+        _copy_validation_metadata(spec, image, figure)
+        # The visual plan may set a per-figure cap, while a report-wide cap keeps
+        # maps readable in email and PDF without turning every visual into a full-page
+        # block.  Leave the key absent when neither is configured to preserve the
+        # established 100% default for existing report specifications.
+        max_width = spec.get("max_width") or visuals_spec.get("max_width")
+        if max_width:
+            figure["max_width"] = str(max_width)
+        figures.append(figure)
 
     def _emit_data(spec: Dict[str, Any], prefix: str, b64: str) -> None:
         cid = _cid(spec, prefix)
-        inline_images.append({"content_id": cid, "content_type": "image/png",
-                              "data": b64, "filename": cid + ".png"})
-        figures.append({"content_id": cid,
-                        "caption": _ascii(spec.get("caption") or spec.get("title") or ""),
-                        "after_heading": spec.get("after")})
+        image: Dict[str, Any] = {"content_id": cid, "content_type": "image/png",
+                                 "data": b64, "filename": cid + ".png"}
+        visual_class = str(spec.get("quality_class") or "").strip()
+        source_urls = spec.get("source_urls") if isinstance(spec.get("source_urls"), list) else []
+        if visual_class:
+            image["quality_class"] = visual_class
+        if source_urls:
+            image["source_urls"] = list(source_urls)
+        inline_images.append(image)
+        figure = {"content_id": cid,
+                  "caption": _ascii(spec.get("caption") or spec.get("title") or ""),
+                  "after_heading": spec.get("after")}
+        if visual_class:
+            figure["quality_class"] = visual_class
+        if source_urls:
+            figure["source_urls"] = list(source_urls)
+        _copy_validation_metadata(spec, image, figure)
+        max_width = spec.get("max_width") or visuals_spec.get("max_width")
+        if max_width:
+            figure["max_width"] = str(max_width)
+        figures.append(figure)
 
     for m in visuals_spec.get("maps") or []:
         if not isinstance(m, dict):
@@ -1369,8 +1499,35 @@ async def render_visuals(
     # for 2-column results); any other chart with ``sql`` runs a single query.
     def _is_multi_sql_radar(c):
         return str(c.get("chart_type") or "").lower() in ("radar", "spider", "polar") and c.get("axes")
-    sql_idx = [i for i, c in enumerate(charts) if c.get("sql") and not _is_multi_sql_radar(c)]
-    radar_idx = [i for i, c in enumerate(charts) if _is_multi_sql_radar(c)]
+    # A governed SQL chart may supply either one ``sql`` prompt or a sequence
+    # of small, source-scoped ``sql_queries`` prompts.  Both are real-data
+    # chart contracts.  Treating the latter as an ordinary local chart skips
+    # the SQL retrieval and can emit axes with no data, which is not a useful
+    # visual and must never satisfy a required-visual delivery contract.
+    def _has_inline_chart_data(chart: Dict[str, Any]) -> bool:
+        """Keep a model-authored chart's declared data authoritative.
+
+        A plan may retain an explanatory SQL prompt alongside valid model-authored
+        rows. The prompt is not a rendering instruction in that case: querying
+        it can return no rows and discard the source-backed chart the model chose.
+        SQL is only the data source when no valid inline chart payload exists.
+        """
+        chart_type = str(chart.get("chart_type") or "").lower()
+        if chart_type in {"radar", "spider", "polar"}:
+            return isinstance(chart.get("categories"), list) and isinstance(chart.get("series"), dict)
+        rows = chart.get("rows") or chart.get("data")
+        return isinstance(rows, list) and bool(rows)
+
+    sql_idx = [
+        i for i, c in enumerate(charts)
+        if (c.get("sql") or c.get("sql_queries"))
+        and not _is_multi_sql_radar(c)
+        and not _has_inline_chart_data(c)
+    ]
+    radar_idx = [
+        i for i, c in enumerate(charts)
+        if _is_multi_sql_radar(c) and not _has_inline_chart_data(c)
+    ]
     sql_b64: Dict[int, Optional[str]] = {}
     if sql_idx or radar_idx:
         import asyncio as _asyncio

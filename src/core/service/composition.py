@@ -33,7 +33,10 @@ logger = get_logger(__name__)
 
 
 SEARCH_MCP_SERVICE_NAME = "search-mcp"
-SEARCH_MCP_AUTH_CONFIG_KEY = "service_credentials.searchmcp0.api_key"
+# SearchMCP's deployed Vault mapping is exposed through this canonical service
+# namespace.  The managed service row keeps only this key reference, never its
+# resolved credential.
+SEARCH_MCP_AUTH_CONFIG_KEY = "dev.services.searchmcp.api_key"
 SEARCH_MCP_MCP_URL_CONFIG_KEY = "dev.services.searchmcp.mcp_url"
 SEARCH_MCP_LEGACY_URI_CONFIG_KEY = "dev.services.searchmcp.uri"
 

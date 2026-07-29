@@ -66,6 +66,7 @@ class LLMManager:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
+        timeout: Optional[Any] = None,
     ) -> bool:
         """
         Initialize LLM provider.
@@ -89,7 +90,11 @@ class LLMManager:
             )
             model = model or self.provider_config.get("model") or get_config("llm.model")
             api_key = api_key or self.provider_config.get("api_key") or get_config("llm.api_key")
-            timeout = self.provider_config.get("timeout") or get_config("llm.timeout")
+            timeout = (
+                timeout
+                if timeout is not None
+                else self.provider_config.get("timeout") or get_config("llm.timeout")
+            )
             # Ensure timeout is numeric
             if timeout is None:
                 raise ValueError("llm.timeout not configured")

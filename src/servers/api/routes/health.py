@@ -70,7 +70,7 @@ def _app_version() -> str:
                 return str(v)
         except Exception:
             pass
-    return get_config("app.version") or "0.1.1RC1"
+    return get_config("app.version") or "0.1.1RC4"
 
 _START_TIME = time.time()
 
@@ -199,7 +199,7 @@ async def build_info(_user: "User" = Depends(verify_api_key)) -> Dict[str, Any]:
         except Exception:
             pass
     return {
-        "version": get_config("app.version") or "0.1.1RC1",
+        "version": get_config("app.version") or "0.1.1RC4",
         "git_commit": "unknown",
         "git_branch": "unknown",
         "build_time": "unknown",

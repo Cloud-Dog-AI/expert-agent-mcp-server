@@ -76,7 +76,7 @@ def _app_version() -> str:
                 return str(v)
     except Exception:
         pass
-    return get_config("app.version") or "0.1.1RC1"
+    return get_config("app.version") or "0.1.1RC4"
 
 
 logger = get_logger(__name__)
@@ -161,6 +161,17 @@ class APIServer(BaseServer):
 
         # Register routes
         self._register_routes()
+        try:
+            from src.servers.api.routes.experts import reconcile_interrupted_async_expert_jobs
+
+            reconciled_jobs = reconcile_interrupted_async_expert_jobs()
+            if reconciled_jobs:
+                logger.warning(
+                    "Marked %s interrupted REST async expert job(s) terminal after worker replacement",
+                    reconciled_jobs,
+                )
+        except Exception as exc:
+            logger.warning("Failed to reconcile REST async expert jobs at startup: %s", exc)
 
     def _create_platform_app(self):
         """Create API app via cloud_dog_api_kit across package versions."""

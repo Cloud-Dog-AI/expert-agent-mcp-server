@@ -45,6 +45,8 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_MAX_CHAT_RETRIES = 2
+
 
 def _coerce_max_tokens(value: Any, default: int = 1024) -> int:
     """Return an integer max_tokens value, tolerating placeholder env values."""
@@ -375,6 +377,30 @@ class LLMClient:
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
+    def _first_configured_value(*keys: str, default: Any = None) -> Any:
+        """Return the first explicitly configured value without treating zero as absent."""
+        for key in keys:
+            value = get_config(key)
+            if value is not None:
+                return value
+        return default
+
+    @classmethod
+    def _retry_policy_value(
+        cls,
+        runtime_keys: tuple[str, ...],
+        test_keys: tuple[str, ...],
+        *,
+        default: Any,
+    ) -> Any:
+        """Resolve retry configuration without allowing test controls into production."""
+        if cls._as_bool(get_config("test.enabled"), False):
+            return cls._first_configured_value(
+                *test_keys, *runtime_keys, default=default
+            )
+        return cls._first_configured_value(*runtime_keys, *test_keys, default=default)
+
+    @staticmethod
     def _is_timeout_error(exc: Exception) -> bool:
         if isinstance(exc, PlatformTimeoutError):
             return True
@@ -409,26 +435,37 @@ class LLMClient:
 
         request = self._build_request(messages, temperature, max_tokens, stream, kwargs)
         session = self._build_session_context()
-        # Chat retries are opt-in; embeddings keep their own retry policy.
+        # Provider recovery is a normal LLM concern. Test-scoped keys remain as
+        # compatibility fallbacks for existing harnesses, but production reads
+        # the llm.* contract first so transient provider failures do not become
+        # terminal document-generation failures after a single attempt.
         retries = max(
             0,
             self._as_int(
-                get_config(
-                    "expert.test.llm_chat_retries",
-                    get_config(
+                self._retry_policy_value(
+                    ("llm.chat_retries", "llm.retries"),
+                    (
+                        "expert.test.llm_chat_retries",
                         "expert.test.llm_retries",
-                        get_config("test.llm_chat_retries", get_config("test.llm_retries")),
+                        "test.llm_chat_retries",
+                        "test.llm_retries",
                     ),
+                    default=1,
                 ),
-                0,
+                1,
             ),
         )
+        retries = min(retries, _MAX_CHAT_RETRIES)
         grace = max(
             0.0,
             self._as_float(
-                get_config(
-                    "expert.test.llm_retry_grace_seconds",
-                    get_config("test.llm_retry_grace_seconds"),
+                self._retry_policy_value(
+                    ("llm.retry_grace_seconds",),
+                    (
+                        "expert.test.llm_retry_grace_seconds",
+                        "test.llm_retry_grace_seconds",
+                    ),
+                    default=1.0,
                 ),
                 1.0,
             ),
@@ -436,31 +473,46 @@ class LLMClient:
         backoff = max(
             0.0,
             self._as_float(
-                get_config(
-                    "expert.test.llm_retry_backoff_seconds",
-                    get_config("test.llm_retry_backoff_seconds"),
+                self._retry_policy_value(
+                    ("llm.retry_backoff_seconds",),
+                    (
+                        "expert.test.llm_retry_backoff_seconds",
+                        "test.llm_retry_backoff_seconds",
+                    ),
+                    default=2.0,
                 ),
                 2.0,
             ),
         )
         retry_on_timeout = self._as_bool(
-            get_config(
-                "expert.test.llm_retry_on_read_timeout",
-                get_config("test.llm_retry_on_read_timeout"),
+            self._retry_policy_value(
+                ("llm.retry_on_read_timeout",),
+                (
+                    "expert.test.llm_retry_on_read_timeout",
+                    "test.llm_retry_on_read_timeout",
+                ),
+                default=True,
             ),
             True,
         )
         attempts = retries + 1
-        request_budget = max(
-            0.0,
-            self._as_float(
-                get_config(
-                    "expert.test.http_timeout_seconds",
-                    get_config("test.http_timeout_seconds"),
-                ),
+        # The HTTP request budget belongs exclusively to the test harness. A
+        # deployed long-running document turn can legitimately exceed its
+        # test-only request timeout and must retain its configured production
+        # retry rather than being silently capped to one attempt.
+        request_budget = 0.0
+        if self._as_bool(get_config("test.enabled"), False):
+            request_budget = max(
                 0.0,
-            ),
-        )
+                self._as_float(
+                    self._first_configured_value(
+                        "expert.test.http_timeout_seconds",
+                        "test.http_timeout_seconds",
+                        default=0.0,
+                    ),
+                    0.0,
+                ),
+            )
         if request_budget > 0.0:
             # Keep one chat request within the API/Web request budget.
             retry_slot = max(1.0, float(self.timeout)) + grace + backoff
@@ -468,14 +520,15 @@ class LLMClient:
             if attempts > max_attempts_by_budget:
                 attempts = max_attempts_by_budget
                 logger.info(
-                    "Capping chat retries to %s attempt(s) to respect request budget %.1fs",
-                    attempts,
-                    request_budget,
+                    f"Capping chat retries to {attempts} attempt(s) to respect request budget "
+                    f"{request_budget:.1f}s"
                 )
         try:
             for attempt in range(1, attempts + 1):
                 try:
-                    response = await self._platform_client.chat(request=request, session=session)
+                    response = await self._platform_client.chat(
+                        request=request, session=session
+                    )
                     return self._to_legacy_response(response)
                 except Exception as err:
                     if (

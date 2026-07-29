@@ -60,6 +60,10 @@ class LLMConfig(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 1024
     timeout: int = 300
+    chat_retries: int = 1
+    retry_grace_seconds: float = 1.0
+    retry_backoff_seconds: float = 2.0
+    retry_on_read_timeout: bool = True
     default_system_prompt: Optional[str] = None
 
 

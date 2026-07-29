@@ -30,10 +30,14 @@ Recent Changes:
 """
 
 import asyncio
+from datetime import datetime, timezone
+import hashlib
 import inspect
 import json
 import os
+from pathlib import Path
 import sys
+import threading
 import time
 import uuid
 from typing import Optional, Dict, Any, List
@@ -48,12 +52,61 @@ from src.servers.base import BaseServer
 from src.config.loader import get_config
 from src.core.session.manager import SessionManager
 from src.core.job.manager import JobManager
+from src.core.job.timeout_contract import (
+    positive_timeout_seconds,
+    resolve_execution_timeout_seconds,
+)
 from src.core.llm.manager import LLMManager
 from src.database.connection import get_db
+from src.database.models import Job
 from src.servers.mcp.tools import MCPTools
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_ASYNC_RUNTIME_INSTANCE_ENV = "MCP_ASYNC_RUNTIME_INSTANCE"
+_ASYNC_RUNTIME_INSTANCE_PATH = Path("/tmp/expert-agent-mcp-async-runtime-instance")
+
+
+def _async_runtime_instance() -> str:
+    """Return the identity shared by workers in exactly one container runtime.
+
+    A wait=false report runner is in-process.  Its durable Job can therefore
+    survive a container replacement even though the asyncio task cannot.  The
+    service hostname is deliberately stable across replacements, so the runtime
+    writes one random token into container-ephemeral ``/tmp``.  Uvicorn workers
+    in that container share it; a replacement receives a fresh filesystem and
+    therefore a different token.
+    """
+    configured = str(os.environ.get(_ASYNC_RUNTIME_INSTANCE_ENV) or "").strip()
+    if configured:
+        return configured
+    try:
+        descriptor = os.open(
+            str(_ASYNC_RUNTIME_INSTANCE_PATH),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        # A sibling Uvicorn worker may have won O_EXCL but not written the token
+        # yet.  Wait briefly rather than accepting an unmarked async job.
+        for _ in range(20):
+            try:
+                token = _ASYNC_RUNTIME_INSTANCE_PATH.read_text(encoding="utf-8").strip()
+            except OSError:
+                token = ""
+            if token:
+                return token
+            time.sleep(0.01)
+        return ""
+    except OSError:
+        return ""
+    try:
+        token = uuid.uuid4().hex
+        os.write(descriptor, token.encode("ascii"))
+        return token
+    finally:
+        os.close(descriptor)
 
 
 def _async_result_failure(result: Any) -> Optional[str]:
@@ -72,6 +125,12 @@ def _async_result_failure(result: Any) -> Optional[str]:
         nested_failure = _async_result_failure(nested_result)
         if nested_failure:
             return nested_failure
+
+    structured_content = result.get("structuredContent")
+    if isinstance(structured_content, dict):
+        structured_failure = _async_result_failure(structured_content)
+        if structured_failure:
+            return structured_failure
 
     explicit_error = result.get("error")
     if explicit_error:
@@ -99,6 +158,136 @@ def _async_result_failure(result: Any) -> Optional[str]:
     return "MCP tool returned an error result"
 
 
+def _find_first_nested_value(value: Any, target_key: str, max_depth: int = 8) -> Any:
+    """Return the first value matching ``target_key`` in a JSON-like result tree."""
+    seen: set[int] = set()
+
+    def walk(node: Any, depth: int) -> Any:
+        if depth > max_depth:
+            return None
+        if isinstance(node, (dict, list)):
+            node_id = id(node)
+            if node_id in seen:
+                return None
+            seen.add(node_id)
+        if isinstance(node, dict):
+            if target_key in node and node[target_key] not in (None, ""):
+                return node[target_key]
+            for nested_key in ("result", "structuredContent", "data", "notification"):
+                if nested_key in node:
+                    found = walk(node[nested_key], depth + 1)
+                    if found not in (None, ""):
+                        return found
+            for nested in node.values():
+                found = walk(nested, depth + 1)
+                if found not in (None, ""):
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = walk(item, depth + 1)
+                if found not in (None, ""):
+                    return found
+        elif isinstance(node, str):
+            text = node.strip()
+            if text and text[:1] in "{[" and len(text) <= 20000:
+                try:
+                    return walk(json.loads(text), depth + 1)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    return walk(value, 0)
+
+
+def _compact_invocation_result(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    compact: Dict[str, Any] = {}
+    for key in (
+        "service_name",
+        "service_id",
+        "tool_name",
+        "status",
+        "message_id",
+        "id",
+        "delivered",
+        "written",
+        "figures",
+        "result_count",
+        "chunk_ids",
+        "source_ids",
+    ):
+        if key in value and value[key] not in (None, ""):
+            compact[key] = value[key]
+    notification = value.get("notification")
+    if isinstance(notification, dict):
+        slim_notification = {
+            key: notification[key]
+            for key in ("message_id", "id", "status", "state")
+            if notification.get(key) not in (None, "")
+        }
+        if slim_notification:
+            compact["notification"] = slim_notification
+    return compact or {
+        "status": value.get("status") or "ok",
+    }
+
+
+def _compact_wait_false_result(tool_name: str, result: Any) -> Any:
+    """Keep async execute_tool poll results small while preserving delivery IDs.
+
+    Long document runs return the full generated output, traces and service
+    payloads. Persisting that whole object as the MCP wait=false job result can
+    leave the durable job stuck after the actual notification was sent. Keep
+    every values-safe invocation summary so pollers retain an auditable path to
+    terminal action tools, while excluding report prose and raw tool payloads.
+    """
+    if tool_name != "execute_tool" or not isinstance(result, dict):
+        return result
+    large_result_keys = {
+        "output_text",
+        "services_invoked",
+        "post_service_results",
+        "agent_trace",
+        "delegations",
+    }
+    if not any(key in result for key in large_result_keys):
+        return result
+
+    compact: Dict[str, Any] = {
+        "compact_async_result": True,
+    }
+    for key in (
+        "expert_id",
+        "llm_model",
+        "mode",
+        "agent_strategy",
+        "session_id",
+        "execution_time_ms",
+        "token_usage",
+    ):
+        if result.get(key) not in (None, ""):
+            compact[key] = result[key]
+
+    output_text = result.get("output_text")
+    if isinstance(output_text, str):
+        compact["output_chars"] = len(output_text)
+        compact["output_sha256"] = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+
+    message_id = _find_first_nested_value(result, "message_id")
+    if message_id not in (None, ""):
+        compact["message_id"] = message_id
+
+    for key in ("services_invoked", "post_service_results"):
+        items = result.get(key)
+        if isinstance(items, list):
+            compact[key] = [_compact_invocation_result(item) for item in items]
+            compact[f"{key}_count"] = len(items)
+            compact[f"{key}_trace_complete"] = True
+
+    return compact
+
+
 class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
     """Keep MCP async jobs visible in the application's durable Jobs surface.
 
@@ -108,6 +297,182 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
     This store retains the API-kit status contract while creating and updating
     a corresponding database Job whose metadata contains the platform job id.
     """
+
+    _HEARTBEAT_INTERVAL_SECONDS = 15.0
+    _CANCELLATION_POLL_SECONDS = 1.0
+    _REPLAY_SECRET_ARGUMENT_KEYS = {
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "cookie",
+        "credential",
+        "credentials",
+        "password",
+        "secret",
+        "token",
+        "x_api_key",
+    }
+
+    def __init__(self, resume_runner_factory: Any = None) -> None:
+        super().__init__()
+        self._heartbeat_interval_seconds = self._positive_float_config(
+            "mcp_server.async_job_heartbeat_seconds",
+            self._HEARTBEAT_INTERVAL_SECONDS,
+        )
+        self._stale_after_seconds = max(
+            self._heartbeat_interval_seconds * 2,
+            self._required_positive_float_config(
+                "mcp_server.async_job_stale_after_seconds",
+            ),
+        )
+        self._execution_timeout_seconds = self._required_positive_float_config(
+            "mcp_server.async_job_execution_timeout_seconds",
+        )
+        # A wait=false acknowledgement must remain executable after the HTTP
+        # worker/container that accepted it is replaced.  The server supplies a
+        # small factory rather than serialising a closure: only JSON-safe tool
+        # arguments are persisted on the Job, never request credentials.
+        self._resume_runner_factory = resume_runner_factory
+
+    @staticmethod
+    def _positive_float_config(key: str, default: float) -> float:
+        try:
+            value = float(get_config(key))
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    @staticmethod
+    def _required_positive_float_config(key: str) -> float:
+        """Resolve a required timeout from the compiled configuration."""
+        return positive_timeout_seconds(get_config(key), field_name=key)
+
+    def _resolve_execution_timeout_seconds(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> float:
+        """Preserve an execute_tool wall budget through the async wrapper."""
+        parameters = (
+            arguments.get("parameters")
+            if tool_name == "execute_tool" and isinstance(arguments, dict)
+            else None
+        )
+        return resolve_execution_timeout_seconds(
+            parameters if isinstance(parameters, dict) else None,
+            configured_timeout_seconds=self._execution_timeout_seconds,
+        )
+
+    @classmethod
+    def _replayable_arguments(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Return JSON-safe resume arguments without accepting credentials.
+
+        Durable jobs are database-visible.  Persisting an API key, bearer token
+        or password there would turn a resilience feature into a credential
+        disclosure path.  Fail closed before acknowledging wait=false when a
+        caller tries to include one; normal MCP authentication remains in the
+        request headers and the accepted job carries only its safe invocation.
+        """
+        def _walk(value: Any, path: str = "arguments") -> Any:
+            if isinstance(value, dict):
+                copied: Dict[str, Any] = {}
+                for key, item in value.items():
+                    key_text = str(key)
+                    if key_text.strip().lower() in cls._REPLAY_SECRET_ARGUMENT_KEYS:
+                        raise ValueError(
+                            "MCP_ASYNC_REPLAY_REJECTED: credential-bearing "
+                            f"argument at {path}.{key_text} cannot be persisted"
+                        )
+                    copied[key_text] = _walk(item, f"{path}.{key_text}")
+                return copied
+            if isinstance(value, list):
+                return [_walk(item, f"{path}[]") for item in value]
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+            raise ValueError(
+                "MCP_ASYNC_REPLAY_REJECTED: non-JSON argument at "
+                f"{path} cannot be persisted"
+            )
+
+        replayable = _walk(dict(arguments or {}))
+        # Force JSON encoding now, rather than discovering an invalid payload
+        # only after the caller has received an acknowledgement.
+        return json.loads(json.dumps(replayable, ensure_ascii=False))
+
+    def _start_heartbeat_worker(
+        self,
+        app_job_id: int,
+    ) -> tuple[threading.Event, threading.Thread]:
+        """Create a heartbeat worker backed by the shared durable Job record."""
+        stop = threading.Event()
+        return stop, threading.Thread(
+            target=self._heartbeat_source_job,
+            args=(app_job_id, stop),
+            daemon=True,
+            name=f"mcp-async-heartbeat-{app_job_id}",
+        )
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _is_stale_source_job(self, job: Job, metadata: Dict[str, Any]) -> bool:
+        """Return whether an in-process async execution can no longer be alive.
+
+        MCP async execution is intentionally in-process.  A container replacement
+        therefore destroys the task, while the database Job remains.  The runner
+        refreshes this heartbeat while it is alive; after the lease expires, the
+        job must become terminal instead of reporting a false permanent running
+        status to Scheduler or an operator.
+        """
+        heartbeat = self._parse_timestamp(metadata.get("mcp_async_heartbeat_at"))
+        if heartbeat is None:
+            heartbeat = self._parse_timestamp(
+                metadata.get("mcp_async_started_at")
+                or getattr(job, "updated_at", None)
+                or getattr(job, "created_at", None)
+            )
+        if heartbeat is None:
+            return True
+        stale_after_seconds = self._stale_after_seconds
+        persisted_timeout = metadata.get("mcp_async_execution_timeout_seconds")
+        if persisted_timeout not in (None, ""):
+            try:
+                stale_after_seconds = max(
+                    stale_after_seconds,
+                    positive_timeout_seconds(
+                        persisted_timeout,
+                        field_name="mcp_async_execution_timeout_seconds",
+                    ),
+                )
+            except ValueError:
+                # Invalid historical metadata cannot make the configured
+                # staleness contract less safe.
+                pass
+        return (datetime.now(timezone.utc) - heartbeat).total_seconds() > stale_after_seconds
+
+    @staticmethod
+    def _is_replaced_runtime_instance(metadata: Dict[str, Any]) -> bool:
+        """Return whether a running durable job belongs to a replaced container."""
+        recorded = str(metadata.get("mcp_async_runtime_instance") or "").strip()
+        current = _async_runtime_instance()
+        return bool(recorded and current and recorded != current)
 
     def submit(
         self,
@@ -126,10 +491,34 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
             )
 
         platform_job_id = f"job-{uuid.uuid4().hex}"
+        heartbeat_lease_token = uuid.uuid4().hex
+        delivery_idempotency_key = f"mcp-async-delivery-{platform_job_id}"
+        # The normal document publisher accepts this data parameter and forwards
+        # it to Notification-Agent.  A resumed model run therefore cannot emit a
+        # duplicate message if the original runtime was replaced at the delivery
+        # boundary.  Other tools simply ignore the parameter.
+        execution_arguments = dict(arguments or {})
+        if tool_name == "execute_tool":
+            execution_parameters = dict(execution_arguments.get("parameters") or {})
+            execution_parameters.setdefault(
+                "delivery_idempotency_key", delivery_idempotency_key
+            )
+            execution_arguments["parameters"] = execution_parameters
+        arguments.clear()
+        arguments.update(execution_arguments)
+        replay_arguments = self._replayable_arguments(execution_arguments)
+        execution_timeout_seconds = self._resolve_execution_timeout_seconds(
+            tool_name,
+            execution_arguments,
+        )
         app_job_id = self._create_source_job(
             platform_job_id,
             tool_name,
             context.get("request"),
+            replay_arguments,
+            delivery_idempotency_key,
+            heartbeat_lease_token,
+            execution_timeout_seconds=execution_timeout_seconds,
         )
         with self._lock:
             self._jobs[platform_job_id] = {
@@ -137,6 +526,7 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
                 "tool_name": tool_name,
                 "arguments": dict(arguments),
                 "app_job_id": app_job_id,
+                "execution_timeout_seconds": execution_timeout_seconds,
             }
 
         task = asyncio.create_task(
@@ -145,11 +535,298 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
                 app_job_id,
                 runner,
                 result_formatter,
+                heartbeat_lease_token,
+                execution_timeout_seconds=execution_timeout_seconds,
             )
         )
         with self._lock:
             self._tasks[platform_job_id] = task
         return platform_job_id
+
+    def get_status(self, platform_job_id: str) -> Dict[str, Any]:
+        """Return live status, falling back to the durable source Job.
+
+        The MCP endpoint can be served by a different Uvicorn worker than the
+        worker that accepted a ``wait=false`` request.  The shared in-memory
+        store is therefore only a fast path; the application Job is the common
+        status record across workers and remains available after replacement.
+        """
+        live = super().get_status(platform_job_id)
+        if live.get("status") != "not_found":
+            return live
+
+        durable = self._get_durable_status(platform_job_id)
+        return durable if durable is not None else live
+
+    def _get_durable_status(self, platform_job_id: str) -> Optional[Dict[str, Any]]:
+        """Rehydrate the MCP polling payload from its persisted application Job."""
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            job = (
+                db.query(Job)
+                .filter(Job.job_type == "mcp_execute_tool")
+                .filter(Job.metadata_json.like(f'%"mcp_platform_job_id": "{platform_job_id}"%'))
+                .order_by(Job.id.desc())
+                .first()
+            )
+            if job is None:
+                return None
+
+            try:
+                metadata = json.loads(job.metadata_json) if job.metadata_json else {}
+            except (TypeError, ValueError):
+                metadata = {}
+            try:
+                result = json.loads(job.response_received) if job.response_received else None
+            except (TypeError, ValueError):
+                result = job.response_received
+            try:
+                error_info = json.loads(job.error_info_json) if job.error_info_json else {}
+            except (TypeError, ValueError):
+                error_info = {"message": job.error_info_json}
+
+            source_status = str(job.status or "pending").strip().lower()
+            running_statuses = {"running", "processing", "in_progress"}
+            resumable_statuses = running_statuses | {"pending"}
+            if source_status in resumable_statuses and self._is_replaced_runtime_instance(metadata):
+                # The old runtime is decisively gone.  Claim the persisted job
+                # once, rebuild its runner from the safe stored arguments, and
+                # leave duplicate pollers observing the same running job.
+                recovery_outcome = self._resume_replaced_source_job(
+                    platform_job_id,
+                    job,
+                    metadata,
+                )
+                # The atomic claim writes the source Job before this response;
+                # report it as running even though the newly scheduled task may
+                # not receive its first event-loop slice until after this poll.
+                if recovery_outcome is not False:
+                    source_status = "running"
+                else:
+                    source_status = "failed"
+                    error_info = {
+                        "message": (
+                            "MCP_ASYNC_RECOVERY_UNAVAILABLE: unable to resume the "
+                            "persisted job; submit a new normal scheduler run"
+                        )
+                    }
+            elif source_status in running_statuses:
+                stale_source_job = self._is_stale_source_job(job, metadata)
+                if stale_source_job:
+                    error = (
+                        "MCP async execution was interrupted before completion: "
+                        "the worker heartbeat expired. Retry the normal scheduler run."
+                    )
+                    self._update_source_job(
+                        int(job.id),
+                        status="failed",
+                        error_info={"message": error, "reason": "async_worker_heartbeat_expired"},
+                        metadata={
+                            "mcp_async_state": "interrupted",
+                            "mcp_async_interrupted_at": self._timestamp(),
+                        },
+                    )
+                    source_status = "failed"
+                    error_info = {"message": error}
+            if source_status in {"completed", "succeeded", "success"}:
+                status = "completed"
+            elif source_status in {"failed", "cancelled", "canceled", "error"}:
+                status = "failed"
+            elif source_status in {"running", "processing", "in_progress"}:
+                status = "running"
+            else:
+                status = "pending"
+
+            payload: Dict[str, Any] = {
+                "status": status,
+                "tool_name": metadata.get("mcp_tool_name"),
+                "app_job_id": int(job.id),
+            }
+            replay_arguments = metadata.get("mcp_async_replay_arguments")
+            if isinstance(replay_arguments, dict):
+                payload["arguments"] = dict(replay_arguments)
+            persisted_timeout = metadata.get(
+                "mcp_async_execution_timeout_seconds"
+            )
+            if persisted_timeout not in (None, ""):
+                try:
+                    payload["execution_timeout_seconds"] = (
+                        positive_timeout_seconds(
+                            persisted_timeout,
+                            field_name=(
+                                "mcp_async_execution_timeout_seconds"
+                            ),
+                        )
+                    )
+                except ValueError as exc:
+                    # Never replace corrupt durable metadata with the process
+                    # default: expose an explicit contract error so callers
+                    # and evidence validators fail closed.
+                    payload["timeout_contract_error"] = str(exc)
+            if result is not None:
+                payload["result"] = result
+            if status == "failed":
+                payload["error"] = str(
+                    error_info.get("message") or error_info.get("detail") or error_info or "Job failed"
+                )
+            return payload
+        except Exception as exc:
+            logger.warning("Unable to rehydrate MCP job %s: %s", platform_job_id, exc)
+            return None
+        finally:
+            db_gen.close()
+
+    def _claim_source_job_recovery(
+        self,
+        app_job_id: int,
+        expected_lease_token: str,
+        replacement_lease_token: str,
+        metadata: Dict[str, Any],
+    ) -> Optional[bool]:
+        """Atomically hand a replaced durable job to one new runtime worker."""
+        if not expected_lease_token:
+            return False
+        updated_metadata = dict(metadata)
+        now = self._timestamp()
+        try:
+            resume_count = int(updated_metadata.get("mcp_async_resume_count") or 0)
+        except (TypeError, ValueError):
+            resume_count = 0
+        updated_metadata.update(
+            {
+                "mcp_async_state": "recovering",
+                "mcp_async_runtime_instance": _async_runtime_instance(),
+                "mcp_async_lease_token": replacement_lease_token,
+                "mcp_async_heartbeat_at": now,
+                "mcp_async_recovered_at": now,
+                "mcp_async_resume_count": resume_count + 1,
+            }
+        )
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            # The unique lease token is an optimistic concurrency guard.  Two
+            # Uvicorn workers can both observe a replacement, but only one can
+            # replace the old token in this single SQL update.
+            rows = (
+                db.query(Job)
+                .filter(Job.id == int(app_job_id))
+                .filter(Job.status.in_({"pending", "running", "processing", "in_progress"}))
+                .filter(
+                    Job.metadata_json.like(
+                        f'%"mcp_async_lease_token": "{expected_lease_token}"%'
+                    )
+                )
+                .update(
+                    {
+                        Job.status: "running",
+                        Job.metadata_json: json.dumps(updated_metadata),
+                    },
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            return rows == 1
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Unable to claim MCP async recovery for job %s: %s", app_job_id, exc)
+            return False
+        finally:
+            db_gen.close()
+
+    def _resume_replaced_source_job(
+        self,
+        platform_job_id: str,
+        job: Job,
+        metadata: Dict[str, Any],
+    ) -> bool:
+        """Schedule one safe replay after a decisive runtime replacement."""
+        app_job_id = int(job.id)
+        tool_name = str(metadata.get("mcp_tool_name") or "").strip()
+        replay_arguments = metadata.get("mcp_async_replay_arguments")
+        previous_lease_token = str(metadata.get("mcp_async_lease_token") or "").strip()
+        if not tool_name or not isinstance(replay_arguments, dict) or not previous_lease_token:
+            error = (
+                "MCP_ASYNC_RECOVERY_UNAVAILABLE: persisted replay metadata is missing; "
+                "submit a new normal scheduler run"
+            )
+            self._update_source_job(
+                app_job_id,
+                status="failed",
+                error_info={"message": error, "reason": "async_replay_metadata_missing"},
+                metadata={
+                    "mcp_async_state": "failed",
+                    "mcp_async_finished_at": self._timestamp(),
+                },
+            )
+            return False
+        if not callable(self._resume_runner_factory):
+            error = "MCP_ASYNC_RECOVERY_UNAVAILABLE: runner factory is not configured"
+            self._update_source_job(
+                app_job_id,
+                status="failed",
+                error_info={"message": error, "reason": "async_replay_factory_missing"},
+                metadata={
+                    "mcp_async_state": "failed",
+                    "mcp_async_finished_at": self._timestamp(),
+                },
+            )
+            return False
+
+        replacement_lease_token = uuid.uuid4().hex
+        if not self._claim_source_job_recovery(
+            app_job_id,
+            previous_lease_token,
+            replacement_lease_token,
+            metadata,
+        ):
+            # Another current-runtime worker may have already replaced this
+            # lease.  Do not tell Scheduler the job failed merely because this
+            # poller lost the optimistic claim; the winning worker owns it.
+            return None
+        try:
+            runner, result_formatter = self._resume_runner_factory(
+                tool_name,
+                dict(replay_arguments),
+            )
+            execution_timeout_seconds = self._resolve_execution_timeout_seconds(
+                tool_name,
+                replay_arguments,
+            )
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(
+                self._run_source_job(
+                    platform_job_id,
+                    app_job_id,
+                    runner,
+                    result_formatter,
+                    replacement_lease_token,
+                    execution_timeout_seconds=execution_timeout_seconds,
+                )
+            )
+        except Exception as exc:
+            error = f"MCP_ASYNC_RECOVERY_UNAVAILABLE: unable to resume durable job: {exc}"
+            self._update_source_job(
+                app_job_id,
+                status="failed",
+                error_info={"message": error, "reason": "async_replay_start_failed"},
+                metadata={
+                    "mcp_async_state": "failed",
+                    "mcp_async_finished_at": self._timestamp(),
+                },
+            )
+            return False
+        with self._lock:
+            self._jobs[platform_job_id] = {
+                "status": "running",
+                "tool_name": tool_name,
+                "arguments": dict(replay_arguments),
+                "app_job_id": app_job_id,
+                "execution_timeout_seconds": execution_timeout_seconds,
+            }
+            self._tasks[platform_job_id] = task
+        return True
 
     async def _run_source_job(
         self,
@@ -157,17 +834,90 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
         app_job_id: int,
         runner: Any,
         result_formatter: Any,
+        heartbeat_lease_token: Optional[str] = None,
+        execution_timeout_seconds: Optional[float] = None,
     ) -> None:
+        timeout_seconds = (
+            positive_timeout_seconds(
+                execution_timeout_seconds,
+                field_name="per-job execution timeout",
+            )
+            if execution_timeout_seconds is not None
+            else self._execution_timeout_seconds
+        )
         with self._lock:
             job = dict(self._jobs.get(platform_job_id) or {})
             job["status"] = "running"
+            job["execution_timeout_seconds"] = timeout_seconds
             self._jobs[platform_job_id] = job
-        self._update_source_job(app_job_id, status="running")
+        started_at = self._timestamp()
+        heartbeat_lease_token = heartbeat_lease_token or uuid.uuid4().hex
+        self._update_source_job(
+            app_job_id,
+            status="running",
+            metadata={
+                "mcp_async_state": "running",
+                "mcp_async_started_at": started_at,
+                "mcp_async_heartbeat_at": started_at,
+                "mcp_async_runtime_instance": _async_runtime_instance(),
+                "mcp_async_lease_token": heartbeat_lease_token,
+                "mcp_async_execution_timeout_seconds": timeout_seconds,
+            },
+        )
+        heartbeat_stop, heartbeat_worker = self._start_heartbeat_worker(app_job_id)
+        heartbeat_worker.start()
 
         try:
-            result = runner()
-            if inspect.isawaitable(result):
-                result = await result
+            async def _run_runner() -> Any:
+                outcome = runner()
+                if inspect.isawaitable(outcome):
+                    return await outcome
+                return outcome
+
+            # The Jobs API records a cancellation durably, whereas a wait=false
+            # MCP execution is an in-process asyncio task.  Without this small
+            # cancellation bridge, cancelling the durable Job only changes the
+            # row while a slow model/report task keeps running and can still
+            # publish.  Poll the durable source row while the runner is alive
+            # and cancel the exact task before it reaches any later publication
+            # boundary.  This does not alter report content or delivery logic.
+            runner_task = asyncio.create_task(_run_runner())
+
+            async def _await_runner_with_cancellation() -> Any:
+                try:
+                    while not runner_task.done():
+                        await asyncio.wait(
+                            {runner_task}, timeout=self._CANCELLATION_POLL_SECONDS
+                        )
+                        if runner_task.done():
+                            break
+                        if self._source_job_is_cancelled(app_job_id):
+                            runner_task.cancel()
+                            try:
+                                await runner_task
+                            except asyncio.CancelledError:
+                                pass
+                            raise asyncio.CancelledError
+                    return runner_task.result()
+                except asyncio.CancelledError:
+                    if not runner_task.done():
+                        runner_task.cancel()
+                        try:
+                            await runner_task
+                        except asyncio.CancelledError:
+                            pass
+                    raise
+
+            try:
+                result = await asyncio.wait_for(
+                    _await_runner_with_cancellation(),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(
+                    "MCP_ASYNC_EXECUTION_TIMEOUT: execution exceeded "
+                    f"{timeout_seconds:g} seconds"
+                ) from exc
             if result_formatter is not None:
                 result = result_formatter(result)
             result_failure = _async_result_failure(result)
@@ -185,20 +935,67 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
                     app_job_id,
                     status="failed",
                     error_info={"message": result_failure},
+                    metadata={
+                        "mcp_async_state": "failed",
+                        "mcp_async_finished_at": self._timestamp(),
+                    },
                 )
             else:
                 # Persist the result on the durable Job too (mirrors the REST async runner) so a
                 # wait=false acknowledgement is fully trackable - status AND response - via /api/jobs.
                 try:
-                    response_received = result if isinstance(result, str) else json.dumps(result)
+                    response_received = result if isinstance(result, str) else json.dumps(result, default=str)
                 except (TypeError, ValueError):
                     response_received = None
                 if response_received is not None:
                     self._update_source_job(
-                        app_job_id, status="completed", response_received=response_received
+                        app_job_id,
+                        status="completed",
+                        response_received=response_received,
+                        metadata={
+                            "mcp_async_state": "completed",
+                            "mcp_async_finished_at": self._timestamp(),
+                        },
                     )
                 else:
-                    self._update_source_job(app_job_id, status="completed")
+                    self._update_source_job(
+                        app_job_id,
+                        status="completed",
+                        metadata={
+                            "mcp_async_state": "completed",
+                            "mcp_async_finished_at": self._timestamp(),
+                        },
+                    )
+        except asyncio.CancelledError:
+            # Graceful ASGI shutdown cancels in-process tasks just before a
+            # container replacement.  Preserve the durable job for the next
+            # runtime unless the Jobs API itself recorded a user cancellation.
+            if not self._source_job_is_cancelled(app_job_id):
+                self._update_source_job(
+                    app_job_id,
+                    status="running",
+                    metadata={
+                        "mcp_async_state": "recovery_pending",
+                        "mcp_async_interrupted_at": self._timestamp(),
+                    },
+                )
+                raise
+            cancellation = "MCP async execution was cancelled before completion"
+            with self._lock:
+                job = dict(self._jobs.get(platform_job_id) or {})
+                job["status"] = "failed"
+                job["error"] = cancellation
+                self._jobs[platform_job_id] = job
+            self._update_source_job(
+                app_job_id,
+                status="failed",
+                error_info={"message": cancellation, "reason": "async_worker_cancelled"},
+                metadata={
+                    "mcp_async_state": "cancelled",
+                    "mcp_async_finished_at": self._timestamp(),
+                },
+            )
+            raise
         except Exception as exc:
             with self._lock:
                 job = dict(self._jobs.get(platform_job_id) or {})
@@ -209,10 +1006,34 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
                 app_job_id,
                 status="failed",
                 error_info={"message": str(exc)},
+                metadata={
+                    "mcp_async_state": "failed",
+                    "mcp_async_finished_at": self._timestamp(),
+                },
             )
         finally:
+            heartbeat_stop.set()
+            await asyncio.to_thread(heartbeat_worker.join, 5)
+            if heartbeat_worker.is_alive():
+                logger.warning("MCP async heartbeat worker did not stop for job %s", app_job_id)
             with self._lock:
                 self._tasks.pop(platform_job_id, None)
+
+    def _heartbeat_source_job(
+        self,
+        app_job_id: int,
+        stop: threading.Event,
+    ) -> None:
+        """Refresh the durable Job heartbeat independently of model progress."""
+        while not stop.wait(self._heartbeat_interval_seconds):
+            try:
+                heartbeat_at = self._timestamp()
+                self._update_source_job(
+                    app_job_id,
+                    metadata={"mcp_async_heartbeat_at": heartbeat_at},
+                )
+            except Exception as exc:  # pragma: no cover - defensive persistence boundary
+                logger.warning("Unable to refresh MCP async heartbeat for job %s: %s", app_job_id, exc)
 
     @staticmethod
     def _request_user_id(request: Any) -> Optional[int]:
@@ -248,6 +1069,10 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
         platform_job_id: str,
         tool_name: str,
         request: Any,
+        replay_arguments: Dict[str, Any],
+        delivery_idempotency_key: str,
+        heartbeat_lease_token: str,
+        execution_timeout_seconds: float,
     ) -> int:
         user_id = cls._request_user_id(request)
         auth_method = (
@@ -267,6 +1092,13 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
                     "mcp_tool_name": tool_name,
                     "request_source": "mcp_console",
                     "auth_method": auth_method,
+                    "mcp_async_runtime_instance": _async_runtime_instance(),
+                    "mcp_async_lease_token": heartbeat_lease_token,
+                    "mcp_async_replay_arguments": replay_arguments,
+                    "mcp_async_delivery_idempotency_key": delivery_idempotency_key,
+                    "mcp_async_execution_timeout_seconds": execution_timeout_seconds,
+                    "mcp_async_state": "accepted",
+                    "mcp_async_accepted_at": cls._timestamp(),
                 },
             )
             return int(job.id)
@@ -279,6 +1111,25 @@ class SourceBackedAsyncJobStore(InMemoryAsyncJobStore):
         db = next(db_gen)
         try:
             JobManager(db).update_job(app_job_id, **updates)
+        finally:
+            db_gen.close()
+
+    @staticmethod
+    def _source_job_is_cancelled(app_job_id: int) -> bool:
+        """Return whether the durable Jobs API has cancelled this MCP task.
+
+        The check is deliberately best-effort: a transient database read fault
+        must not turn a healthy report run into a cancellation.  A confirmed
+        cancellation is terminal and is acted on by ``_run_source_job``.
+        """
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            job = JobManager(db).get_job(app_job_id)
+            return bool(job and str(job.status or "").strip().lower() in {"cancelled", "canceled"})
+        except Exception as exc:  # pragma: no cover - defensive cancellation probe
+            logger.warning("Unable to read cancellation state for MCP job %s: %s", app_job_id, exc)
+            return False
         finally:
             db_gen.close()
 
@@ -301,8 +1152,9 @@ class MCPToolAuthMiddleware:
     require authentication before discovery or tool dispatch.
     """
 
-    _OPEN_PATHS = {"/health", "/mcp/health", "/mcp/tools"}
+    _OPEN_PATHS = {"/health", "/mcp/health"}
     _ADMIN_TOOL_PREFIXES = ("admin_",)
+    _EXECUTION_ROLES = {"admin", "user", "operator"}
 
     def __init__(self, app):
         self.app = app
@@ -314,12 +1166,24 @@ class MCPToolAuthMiddleware:
         if path in self._OPEN_PATHS:
             return await self.app(scope, receive, send)
 
-        is_jsonrpc = path == "/mcp" or path.endswith("/mcp")
+        is_jsonrpc = path in {"/mcp", "/messages", "/message"} or path.endswith("/mcp")
         is_bespoke_tool = path.startswith("/mcp/")
-        if not (is_jsonrpc or is_bespoke_tool):
+        is_legacy_transport = path == "/sse"
+        if not (is_jsonrpc or is_bespoke_tool or is_legacy_transport):
             return await self.app(scope, receive, send)
 
         method = scope.get("method", "GET")
+        principal = self._authenticate(scope)
+        if principal is None:
+            return await self._send_401(send)
+        role, actor = principal
+        if role not in self._EXECUTION_ROLES:
+            return await self._send_json(
+                send,
+                403,
+                {"detail": "Insufficient role"},
+            )
+
         body = b""
         if method in ("POST", "PUT", "PATCH"):
             more = True
@@ -328,10 +1192,9 @@ class MCPToolAuthMiddleware:
                 body += message.get("body", b"")
                 more = message.get("more_body", False)
 
-        if self._requires_auth(is_jsonrpc, body) and not self._authenticate(scope):
-            return await self._send_401(send)
-
-        compat_response = self._jsonrpc_compat_response(body) if is_jsonrpc else None
+        if is_jsonrpc and body:
+            body = self._bind_authenticated_context(body, role=role, actor=actor)
+        compat_response = self._jsonrpc_compat_response(body, role=role) if is_jsonrpc else None
         if compat_response is not None:
             status, payload = compat_response
             return await self._send_json(send, status, payload)
@@ -348,15 +1211,13 @@ class MCPToolAuthMiddleware:
             return await self.app(scope, _replay, send)
         return await self.app(scope, receive, send)
 
-    @staticmethod
-    def _requires_auth(is_jsonrpc: bool, body: bytes) -> bool:
-        if is_jsonrpc:
-            return True
-        # bespoke /mcp/<tool> dispatch route (already filtered to /mcp/* non-open)
-        return True
-
     @classmethod
-    def _jsonrpc_compat_response(cls, body: bytes) -> tuple[int, dict[str, Any]] | None:
+    def _jsonrpc_compat_response(
+        cls,
+        body: bytes,
+        *,
+        role: str,
+    ) -> tuple[int, dict[str, Any]] | None:
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
         except Exception:
@@ -372,14 +1233,7 @@ class MCPToolAuthMiddleware:
             if not isinstance(params, dict):
                 return None
             name = str(params.get("name") or "")
-            arguments = params.get("arguments") or {}
-            auth_context = arguments.get("auth_context") if isinstance(arguments, dict) else None
-            role = (
-                str((auth_context or {}).get("role") or "").strip().lower()
-                if isinstance(auth_context, dict)
-                else ""
-            )
-            if name.startswith(cls._ADMIN_TOOL_PREFIXES) and role and role != "admin":
+            if name.startswith(cls._ADMIN_TOOL_PREFIXES) and role != "admin":
                 return 403, {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -391,26 +1245,37 @@ class MCPToolAuthMiddleware:
         return None
 
     @staticmethod
-    def _authenticate(scope) -> bool:
+    def _bind_authenticated_context(body: bytes, *, role: str, actor: str) -> bytes:
+        """Replace caller-supplied auth context with the validated principal."""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception:
+            return body
+        if not isinstance(payload, dict) or payload.get("method") != "tools/call":
+            return body
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return body
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+            params["arguments"] = arguments
+        arguments["auth_context"] = {"role": role, "user_id": actor}
+        return json.dumps(payload).encode("utf-8")
+
+    @staticmethod
+    def _authenticate(scope) -> tuple[str, str] | None:
         headers = {
             k.decode("latin-1").lower(): v.decode("latin-1")
             for k, v in scope.get("headers", [])
         }
         api_key = headers.get("x-api-key")
-        if api_key:
-            # 1) configured expert-agent service/admin key(s)
-            for cfg_key in ("api_key", "api_server.api_key", "mcp_server.api_key", "client_api.admin_api_key"):
-                try:
-                    configured = get_config(cfg_key)
-                except Exception:
-                    configured = None
-                if configured and str(configured) == api_key:
-                    return True
         authorization = headers.get("authorization", "")
         bearer = authorization.split(" ", 1)[1].strip() if authorization.lower().startswith("bearer ") else ""
         if not api_key and not bearer:
-            return False
-        # 2) DB-backed user API key or user bearer token
+            return None
+        # Resolve database-backed principals first so configured keys that have
+        # been bootstrapped retain their real numeric actor identity.
         try:
             from src.database.connection import get_db
             from src.servers.api.auth import _validate_api_key_user, _validate_bearer_user
@@ -425,10 +1290,25 @@ class MCPToolAuthMiddleware:
                 )
             finally:
                 db.close()
-            return bool(user and getattr(user, "enabled", False))
+            if user and getattr(user, "enabled", False):
+                role = str(getattr(user, "role", None) or "user").strip().lower()
+                actor = str(getattr(user, "id", None) or getattr(user, "username", None) or "user")
+                return (role, actor)
         except Exception as exc:  # pragma: no cover - auth resolution must fail closed
             logger.warning("MCP auth resolution error (failing closed): %s", exc)
-            return False
+
+        # A configured service key remains a valid machine principal if it has
+        # not been persisted in the user database. Existing admin handlers
+        # require an integer actor identifier, so use the reserved system id.
+        if api_key:
+            for cfg_key in ("api_key", "api_server.api_key", "mcp_server.api_key", "client_api.admin_api_key"):
+                try:
+                    configured = get_config(cfg_key)
+                except Exception:
+                    configured = None
+                if configured and str(configured) == api_key:
+                    return ("admin", "0")
+        return None
 
     @staticmethod
     async def _send_json(send, status: int, payload_obj: dict[str, Any]) -> None:
@@ -526,7 +1406,7 @@ class MCPServer(BaseServer):
         self.tools = MCPTools()
         self._server_task: Optional[asyncio.Task] = None
         self._stopping = False
-        self._async_job_store = SourceBackedAsyncJobStore()
+        self._async_job_store = SourceBackedAsyncJobStore(self._build_async_runner)
         # Keep stdio JSON-RPC state local to the stdio transport helper.
         self._rpc_sessions: Dict[str, Dict[str, Any]] = {}
         self._async_jobs: Dict[str, Dict[str, Any]] = {}
@@ -813,6 +1693,26 @@ class MCPServer(BaseServer):
         self._audit_tool_call(tool_name, arguments, result, (time.monotonic() - _t0) * 1000)
         return result
 
+    def _build_async_runner(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> tuple[Any, Any]:
+        """Recreate the normal MCP runner from durable JSON-safe arguments."""
+        def _runner(_name=tool_name, _arguments=arguments):
+            return self._run_tool_call(_name, _arguments)
+
+        def _formatter(result: Any) -> Any:
+            if isinstance(result, dict) and result.get("isError") is True:
+                return result
+            compact = _compact_wait_false_result(tool_name, result)
+            return {
+                "content": [{"type": "text", "text": json.dumps(compact, default=str)}],
+                "structuredContent": compact,
+            }
+
+        return _runner, _formatter
+
     async def _dispatch_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         args = arguments or {}
         if tool_name == "chat":
@@ -1045,20 +1945,7 @@ class MCPServer(BaseServer):
             # non-delivering jobs while the REST async path did not (W28M-1635 R2 / raw ledger R50).
             if arguments.get("wait") is False:
                 guid = uuid.uuid4().hex[:8]
-
-                def _runner(_n=name, _a=arguments):
-                    return self._run_tool_call(_n, _a)
-
-                def _formatter(result: Any) -> Any:
-                    # Preserve an MCP error envelope as-is so the store's failure detection and
-                    # error-text extraction see it unchanged; wrap a successful result in the
-                    # standard content/structuredContent shape for the caller.
-                    if isinstance(result, dict) and result.get("isError") is True:
-                        return result
-                    return {
-                        "content": [{"type": "text", "text": json.dumps(result)}],
-                        "structuredContent": result,
-                    }
+                _runner, _formatter = self._build_async_runner(name, arguments)
 
                 platform_job_id = self._async_job_store.submit(
                     name, arguments, {"runner": _runner, "result_formatter": _formatter}

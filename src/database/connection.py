@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 from typing import AsyncGenerator, Generator
 
-from sqlalchemy import Engine, inspect
+from sqlalchemy import Engine, event, inspect
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
@@ -61,6 +61,8 @@ _async_engine: AsyncEngine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 _migrations_applied = False
+
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 
 def _to_bool(v, default: bool = False) -> bool:
@@ -237,6 +239,28 @@ def _ensure_idam_role_tables(engine: Engine) -> None:
     )
 
 
+def _configure_sqlite_engine(engine: Engine, *, set_journal_mode: bool = False) -> None:
+    """Apply connection settings needed by concurrent durable job workers."""
+    if engine.dialect.name != "sqlite":
+        return
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_contention_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        finally:
+            cursor.close()
+
+    if set_journal_mode:
+        # WAL prevents a long-running read transaction from blocking the
+        # separate process that renews an async job's durable lease. This must
+        # run through a synchronous connection; the async engine receives the
+        # same persistent journal mode and only needs the connect hook above.
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+
+
 def init_db(force_reinit: bool = False) -> None:
     """Initialize database connection."""
     global _engine, _async_engine, _SessionLocal, _AsyncSessionLocal
@@ -253,6 +277,7 @@ def init_db(force_reinit: bool = False) -> None:
     settings = _build_settings()
 
     _engine = build_sync_engine(settings)
+    _configure_sqlite_engine(_engine, set_journal_mode=True)
     _ensure_idam_role_tables(_engine)
     _SessionLocal = sessionmaker(
         bind=_engine,
@@ -262,6 +287,7 @@ def init_db(force_reinit: bool = False) -> None:
     )
 
     _async_engine = build_async_engine(settings)
+    _configure_sqlite_engine(_async_engine.sync_engine)
     _AsyncSessionLocal = async_sessionmaker(
         bind=_async_engine,
         expire_on_commit=False,

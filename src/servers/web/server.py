@@ -259,7 +259,7 @@ def _app_version() -> str:
                 return str(v)
     except Exception:
         pass
-    return get_config("app.version") or "0.1.1RC1"
+    return get_config("app.version") or "0.1.1RC4"
 
 
 _SECRET_KEY_FRAGMENTS = (
@@ -995,9 +995,9 @@ class WebServer(BaseServer):
         async def web_a2a_proxy(path: str, request: Request) -> Response:
             """Forward browser A2A requests to the internal listener.
 
-            Discovery and health remain readable before login so the shared
-            shell can report service state. Mutating broadcasts require a real
-            Web UI session and receive only that user's bearer token.
+            Health remains readable before login. Skill discovery and mutating
+            broadcasts require a real Web UI session and receive only that
+            user's bearer token.
             """
             normalised_path = path.strip("/")
             allowed_get_paths = {"health", "topics", ".well-known/agent.json"}
@@ -1015,7 +1015,7 @@ class WebServer(BaseServer):
 
             state = self._get_web_session_state(request)
             token = state.get("auth_token") if state else None
-            if request.method.upper() == "POST" and not token:
+            if normalised_path != "health" and not token:
                 return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
             loopback_host = str(ip_address(0x7F000001))

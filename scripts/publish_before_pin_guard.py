@@ -12,7 +12,7 @@ shipped BROKEN images that still reported "healthy".
 
 This guard runs in a clean, credentialled-but-cache-cold environment and resolves
 EVERY internal shared-package pin (namespace ``cloud-dog-*``) declared by a
-consumer against the SINGLE approved internal index (pypi.org) BEFORE
+consumer against the SINGLE approved internal index (pypi.cloud-dog.net) BEFORE
 the build proceeds. Any internal pin that does not resolve makes the guard exit
 non-zero (FAIL CLOSED). It never falls back to a second index and never queries a
 Gitea/GitHub package boundary (COMMON-PACKAGE §0A.GH / PS-97 §3.3 single-index).
@@ -21,7 +21,7 @@ Usage:
     publish_before_pin_guard.py [CONSUMER_DIR]
 Env:
     PIP_CONFIG_FILE   pip config with the single internal index-url (preferred).
-    GUARD_INDEX_HOST  expected internal index host (default pypi.org);
+    GUARD_INDEX_HOST  expected internal index host (default pypi.cloud-dog.net);
                       the guard refuses forbidden Gitea/GitHub index hosts.
 Exit codes: 0 = all internal pins resolve · 2 = one or more UNRESOLVED (fail
 closed) · 3 = misconfiguration (no index / forbidden boundary / no manifests).
@@ -223,7 +223,7 @@ def resolve_one(python, name, spec, cache_dir, pipconf):
 def main(argv):
     consumer_dir = argv[1] if len(argv) > 1 else "."
     python = os.environ.get("GUARD_PYTHON", sys.executable)
-    expected_host = os.environ.get("GUARD_INDEX_HOST", "pypi.org")
+    expected_host = os.environ.get("GUARD_INDEX_HOST", "pypi.cloud-dog.net")
 
     internal_url, host_or_reason = _internal_index_from_pip_config(expected_host)
     if internal_url is None:

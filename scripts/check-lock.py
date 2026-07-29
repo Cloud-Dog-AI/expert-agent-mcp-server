@@ -12,9 +12,11 @@
 #     -o requirements.lock requirements.txt
 # (with PIP_INDEX_URL pointed at an index that hosts the cloud-dog-* packages).
 
+import argparse
+import importlib.metadata
+import pathlib
 import re
 import sys
-import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -75,7 +77,30 @@ def leak_check() -> list[str]:
     return findings
 
 
+def installed_pins() -> dict[str, str]:
+    """Return normalized installed distribution names and versions.
+
+    Native tests must run against the same sealed dependency closure as the
+    Docker image.  ``pip check`` only validates dependencies of packages that
+    are already installed; it does not report a direct locked package that is
+    absent altogether.  Reading installed distribution metadata closes that
+    gap without contacting a package index.
+    """
+    return {
+        norm(distribution.metadata["Name"]): distribution.version
+        for distribution in importlib.metadata.distributions()
+        if distribution.metadata.get("Name")
+    }
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate the sealed dependency lock")
+    parser.add_argument(
+        "--installed",
+        action="store_true",
+        help="also require the active interpreter to match requirements.lock exactly",
+    )
+    args = parser.parse_args()
     direct = direct_deps()
     pins = locked_pins()
     missing = sorted(d for d in direct if d not in pins)
@@ -101,7 +126,28 @@ def main() -> int:
     if platform_mismatches:
         print(f"PLATFORM VERSION MISMATCHES: {platform_mismatches}")
 
-    ok = not missing and not leaks and not unpinned_platform and not platform_mismatches
+    installed_missing: list[str] = []
+    installed_mismatches: list[str] = []
+    if args.installed:
+        installed = installed_pins()
+        installed_missing = sorted(name for name in pins if name not in installed)
+        installed_mismatches = [
+            f"{name}: lock={version}, installed={installed.get(name, 'missing')}"
+            for name, version in sorted(pins.items())
+            if installed.get(name) != version
+        ]
+        print(f"installed packages: {len(installed)}")
+        print(f"MISSING FROM ACTIVE ENVIRONMENT: {installed_missing or 'none'}")
+        print(f"ACTIVE ENVIRONMENT VERSION MISMATCHES: {installed_mismatches or 'none'}")
+
+    ok = (
+        not missing
+        and not leaks
+        and not unpinned_platform
+        and not platform_mismatches
+        and not installed_missing
+        and not installed_mismatches
+    )
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

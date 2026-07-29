@@ -112,6 +112,32 @@ PY
     printf '%s\n' "python3"
 }
 
+resolve_runtime_env_profile() {
+    [ -z "$ENV_FILE" ] && return 0
+
+    local python_bin resolver resolver_output key encoded value
+    python_bin=$(select_python_bin)
+    resolver="$SCRIPT_DIR/scripts/resolve-runtime-env.py"
+    if [ ! -f "$resolver" ]; then
+        log_error "Runtime env resolver is missing: $resolver"
+        return 1
+    fi
+
+    if ! resolver_output=$("$python_bin" "$resolver" "$ENV_FILE"); then
+        log_error "Failed to resolve Vault expressions for runtime env profile"
+        return 1
+    fi
+
+    while IFS=$'\t' read -r key encoded; do
+        [ -z "$key" ] && continue
+        if ! value=$(printf '%s' "$encoded" | base64 --decode); then
+            log_error "Failed to decode resolved runtime env value for $key"
+            return 1
+        fi
+        export "$key=$value"
+    done <<< "$resolver_output"
+}
+
 is_known_server() {
     case "$1" in
         api|web|mcp|a2a) return 0 ;;
@@ -666,14 +692,17 @@ case "$COMMAND" in
         ;;
 esac
 
-# Initialize configuration
-init_server_config
+# Resolve exact Vault expressions from the selected profile before the platform
+# config loader compiles server settings. Values stay in process environment.
+resolve_runtime_env_profile || exit 1
+init_server_config || exit 1
 
 # Main commands
 case "$COMMAND" in
     start)
         if [ -n "$2" ]; then
             start_server "$2"
+            exit $?
         else
             echo "Starting all enabled servers..."
             for s in api mcp a2a web; do start_server "$s" || true; done
@@ -682,6 +711,7 @@ case "$COMMAND" in
     stop)
         if [ -n "$2" ]; then
             stop_server "$2"
+            exit $?
         else
             echo "Stopping all servers..."
             for s in web a2a mcp api; do stop_server "$s" || true; done
@@ -690,6 +720,7 @@ case "$COMMAND" in
     restart)
         if [ -n "$2" ]; then
             stop_server "$2" && sleep 2 && start_server "$2"
+            exit $?
         else
             "$0" "${FORWARD_ENV_ARGS[@]}" stop && sleep 2 && "$0" "${FORWARD_ENV_ARGS[@]}" start
         fi
@@ -697,6 +728,7 @@ case "$COMMAND" in
     force-stop)
         if [ -n "$2" ]; then
             force_stop_server "$2"
+            exit $?
         else
             echo "Force-stopping all servers..."
             for s in web a2a mcp api; do force_stop_server "$s" || true; done

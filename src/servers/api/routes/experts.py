@@ -29,25 +29,123 @@ Recent Changes:
 - Added DELETE endpoint for expert deletion
 """
 
+import asyncio
+from datetime import datetime, timezone
+import json
+import time
+import uuid
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import Dict, Any, List, Optional, Union
-import json
 from pydantic import BaseModel, Field
 from cloud_dog_cache.invalidation import CONFIG_CHANGE, PROMPT_CHANGE, invalidate_event
 
+from src.config import get_config
 from src.database.connection import get_db
 from src.common.a2a_client import publish_config_change_event
 from src.core.expert.manager import ExpertManager
 from src.core.execution.transactional import TransactionalExecutor
 from src.core.security.redaction import merge_write_only_values, redact_sensitive_values
 from src.core.service.composition import ServiceCompositionManager
+from src.core.job.timeout_contract import resolve_execution_timeout_seconds
 from src.core.audit.logger import log_audit_event
-from src.database.models import ExternalService, ServiceBinding, SubExpertBinding, User
+from src.database.models import ExternalService, Job, ServiceBinding, SubExpertBinding, User
 from src.servers.api.auth import require_permission, verify_admin, verify_api_key
+from src.utils.logger import get_logger
 
 router = APIRouter(prefix="/experts", tags=["experts"], dependencies=[Depends(require_permission("experts:read"))])
+logger = get_logger(__name__)
+
+_ASYNC_EXPERT_RUNTIME_INSTANCE = uuid.uuid4().hex
+
+
+def _utc_now() -> str:
+    """Return a compact UTC timestamp for durable async-job metadata."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _async_expert_execution_timeout_seconds(
+    parameters: Optional[Dict[str, Any]] = None,
+) -> float:
+    """Resolve the REST wrapper timeout while preserving a request budget."""
+    configured = get_config(
+        "expert.async_execution_timeout_seconds",
+        get_config("mcp_server.async_job_execution_timeout_seconds"),
+    )
+    return resolve_execution_timeout_seconds(
+        parameters,
+        configured_timeout_seconds=configured,
+    )
+
+
+def _async_execution_error_info(exc: BaseException) -> Dict[str, str]:
+    """Preserve exception type and causal chain when a provider supplies no text."""
+    chain: List[str] = []
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen and len(chain) < 4:
+        seen.add(id(current))
+        detail = str(current).strip()
+        chain.append(type(current).__name__ + (f": {detail}" if detail else ""))
+        cause = current.__cause__ or current.__context__
+        current = cause if isinstance(cause, BaseException) else None
+    summary = " <- caused by ".join(chain) or type(exc).__name__
+    return {
+        "code": "EXPERT_ASYNC_EXECUTION_FAILED",
+        "error": summary,
+        "exception_type": type(exc).__name__,
+    }
+
+
+def reconcile_interrupted_async_expert_jobs() -> int:
+    """Fail prior-process REST jobs that cannot resume after a worker replacement.
+
+    FastAPI background tasks are process-local. A pending or processing job owned by
+    an earlier runtime therefore has no executable worker after a restart and must
+    be terminally recorded instead of remaining falsely in progress.
+    """
+    from src.core.job.manager import JobManager
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        rows = (
+            db.query(Job)
+            .filter(Job.job_type == "expert_execute", Job.status.in_(("pending", "processing")))
+            .all()
+        )
+        manager = JobManager(db)
+        reconciled = 0
+        for job in rows:
+            try:
+                metadata = json.loads(job.metadata_json) if job.metadata_json else {}
+            except (TypeError, ValueError):
+                metadata = {}
+            owner = metadata.get("expert_async_runtime_instance") if isinstance(metadata, dict) else None
+            if not owner or owner == _ASYNC_EXPERT_RUNTIME_INSTANCE:
+                continue
+            manager.update_job(
+                job_id=job.id,
+                status="failed",
+                error_info={
+                    "code": "EXPERT_ASYNC_EXECUTION_INTERRUPTED",
+                    "error": "REST async expert execution was interrupted by a worker replacement. Retry the request.",
+                    "previous_runtime_instance": str(owner),
+                },
+                metadata={
+                    "expert_async_state": "interrupted",
+                    "expert_async_interrupted_at": _utc_now(),
+                },
+            )
+            reconciled += 1
+        return reconciled
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
 
 
 # Keys of the per-expert LLM config carried inside llm_params_json. These are APPLIED at
@@ -811,23 +909,85 @@ async def _process_expert_execute_job(
     db_gen = get_db()
     db = next(db_gen)
     job_manager = JobManager(db)
+    started_at = _utc_now()
+    started_monotonic = time.monotonic()
+    timeout_seconds = _async_expert_execution_timeout_seconds(parameters)
     try:
-        job_manager.update_job(job_id=job_id, status="processing")
-        executor = TransactionalExecutor(db)
-        result = await executor.execute(
-            expert_id=expert_id,
-            input_text=input_text,
-            parameters=parameters,
-            context=context,
-            auth_context=auth_context,
+        job_manager.update_job(
+            job_id=job_id,
+            status="processing",
+            metadata={
+                "expert_async_state": "running",
+                "expert_async_runtime_instance": _ASYNC_EXPERT_RUNTIME_INSTANCE,
+                "expert_async_started_at": started_at,
+                "expert_async_timeout_seconds": timeout_seconds,
+            },
         )
+        executor = TransactionalExecutor(db)
+        result = await asyncio.wait_for(
+            executor.execute(
+                expert_id=expert_id,
+                input_text=input_text,
+                parameters=parameters,
+                context=context,
+                auth_context=auth_context,
+            ),
+            timeout=timeout_seconds,
+        )
+        current_job = job_manager.get_job(job_id)
+        if current_job and str(current_job.status or "").lower() == "cancelled":
+            return
         job_manager.update_job(
             job_id=job_id,
             status="completed",
             response_received=json.dumps(result) if not isinstance(result, str) else result,
+            metadata={
+                "expert_async_state": "completed",
+                "expert_async_finished_at": _utc_now(),
+                "expert_async_duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+            },
         )
-    except Exception as exc:  # pragma: no cover - execution failure surfaced on the job
-        job_manager.update_job(job_id=job_id, status="failed", error_info={"error": str(exc)})
+    except asyncio.TimeoutError:
+        job_manager.update_job(
+            job_id=job_id,
+            status="timed_out",
+            error_info={
+                "code": "EXPERT_ASYNC_EXECUTION_TIMEOUT",
+                "error": f"REST async expert execution exceeded {timeout_seconds:g} seconds",
+            },
+            metadata={
+                "expert_async_state": "timed_out",
+                "expert_async_finished_at": _utc_now(),
+                "expert_async_duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+            },
+        )
+    except asyncio.CancelledError:
+        job_manager.update_job(
+            job_id=job_id,
+            status="failed",
+            error_info={
+                "code": "EXPERT_ASYNC_EXECUTION_INTERRUPTED",
+                "error": "REST async expert execution was cancelled before completion",
+            },
+            metadata={
+                "expert_async_state": "interrupted",
+                "expert_async_interrupted_at": _utc_now(),
+            },
+        )
+        raise
+    except Exception as exc:  # execution failure is surfaced on the durable job
+        error_info = _async_execution_error_info(exc)
+        job_manager.update_job(
+            job_id=job_id,
+            status="failed",
+            error_info=error_info,
+            metadata={
+                "expert_async_state": "failed",
+                "expert_async_finished_at": _utc_now(),
+                "expert_async_duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+                "expert_async_error_type": error_info["exception_type"],
+            },
+        )
     finally:
         try:
             next(db_gen)
@@ -874,7 +1034,12 @@ async def execute_expert(
             job_type="expert_execute",
             user_id=current_user.id,
             prompt_sent=request.input_text,
-            metadata={"expert_id": expert_id},
+            metadata={
+                "expert_id": expert_id,
+                "expert_async_state": "queued",
+                "expert_async_runtime_instance": _ASYNC_EXPERT_RUNTIME_INSTANCE,
+                "expert_async_accepted_at": _utc_now(),
+            },
         )
         background_tasks.add_task(
             _process_expert_execute_job,

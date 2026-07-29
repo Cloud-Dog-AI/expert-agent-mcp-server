@@ -26,13 +26,13 @@ chromadb==1.5.9
 click==8.4.2
 cloud-dog-agent==0.3.2
 cloud-dog-api-kit==0.14.1
-cloud-dog-config==0.3.4
+cloud-dog-config==0.3.6
 cloud-dog-idam==0.5.4
 cloud-dog-jobs==0.4.4
 cloud-dog-llm==0.4.4
 cloud-dog-logging==0.4.1
-cloud-dog-vdb==0.5.5
-cloud_dog_cache==0.2.1
+cloud-dog-vdb==0.5.8
+cloud_dog_cache==0.2.3
 cloud_dog_db==0.3.3
 cloud_dog_storage==0.1.8
 colorama==0.4.6

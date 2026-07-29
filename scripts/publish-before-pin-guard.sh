@@ -21,7 +21,7 @@ CONSUMER_DIR="${1:-.}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD_PY="${HERE}/publish_before_pin_guard.py"
 PYTHON_BIN="${GUARD_PYTHON:-$(command -v python3)}"
-EXPECTED_HOST="${GUARD_INDEX_HOST:-pypi.org}"
+EXPECTED_HOST="${GUARD_INDEX_HOST:-pypi.cloud-dog.net}"
 
 if [[ ! -f "${GUARD_PY}" ]]; then
   echo "publish-before-pin-guard: cannot find ${GUARD_PY}" >&2; exit 3

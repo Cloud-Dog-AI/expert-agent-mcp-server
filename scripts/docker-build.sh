@@ -77,6 +77,59 @@ url_has_userinfo() {
     URL_TO_REDACT="$1" python3 "${SCRIPT_DIR}/redact-url.py" --has-userinfo
 }
 
+# The normal build bootstrap deliberately exposes only Vault connection details.
+# Resolve the internal package index here so the documented build entrypoint does
+# not depend on an undocumented, manually exported PYPI_URL credential set.
+load_private_pypi_from_vault() {
+    if [[ -n "${PYPI_URL:-}" && -n "${PYPI_USERNAME:-}" && -n "${PYPI_PASSWORD:-}" ]]; then
+        export PYPI_URL PYPI_USERNAME PYPI_PASSWORD
+        return 0
+    fi
+
+    if [[ -z "${VAULT_ADDR:-}" || -z "${VAULT_TOKEN:-}" || -z "${VAULT_MOUNT_POINT:-}" || -z "${VAULT_CONFIG_PATH:-}" ]]; then
+        return 0
+    fi
+
+    local vault_raw
+    vault_raw="$(curl -skfsS -H "X-Vault-Token: ${VAULT_TOKEN}" "${VAULT_ADDR%/}/v1/${VAULT_MOUNT_POINT}/data/${VAULT_CONFIG_PATH}" 2>/dev/null || true)"
+    if [[ -z "${vault_raw}" ]]; then
+        return 0
+    fi
+
+    vault_extract_pypi() {
+        VAULT_RAW_INPUT="${vault_raw}" python3 - "$1" <<'PY'
+import json
+import os
+import sys
+
+document = json.loads(os.environ["VAULT_RAW_INPUT"])
+config = document["data"]["data"].get("json", document["data"]["data"])
+if isinstance(config.get("dev"), dict):
+    config = config["dev"]
+value = config
+for part in sys.argv[1].split("."):
+    value = value[part]
+if not isinstance(value, str):
+    raise TypeError(f"{sys.argv[1]} is not a string")
+print(value)
+PY
+    }
+
+    if [[ -z "${PYPI_URL:-}" ]]; then
+        PYPI_URL="$(vault_extract_pypi "repository.pypi.url" 2>/dev/null || true)"
+    fi
+    if [[ -z "${PYPI_USERNAME:-}" ]]; then
+        PYPI_USERNAME="$(vault_extract_pypi "repository.pypi.username" 2>/dev/null || true)"
+    fi
+    if [[ -z "${PYPI_PASSWORD:-}" ]]; then
+        PYPI_PASSWORD="$(vault_extract_pypi "repository.pypi.password" 2>/dev/null || true)"
+    fi
+    unset vault_raw
+    unset -f vault_extract_pypi
+
+    export PYPI_URL PYPI_USERNAME PYPI_PASSWORD
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -356,6 +409,7 @@ else
     # via the PYPI_URL environment variable (internal CI / Vault-credentialled).
     # No internal hostname is baked into this script (PS-97 §1.1.2 — keep the
     # publishable tree free of internal topology).
+    load_private_pypi_from_vault
     PYPI_URL_ARG="${PYPI_URL:-}"
     PYPI_USERNAME_ARG="${PYPI_USERNAME:-}"
     PYPI_PASSWORD_ARG="${PYPI_PASSWORD:-}"
@@ -363,6 +417,15 @@ else
         echo -e "${RED}ERROR: dev variant requires PYPI_URL to be set (internal package index).${NC}" >&2
         echo -e "${RED}       Set PYPI_URL, or use --variant public for the external build.${NC}" >&2
         exit 2
+    fi
+    # Vault stores the repository root, while pip resolves packages through the
+    # PEP 503 simple endpoint. Normalise both root and trailing-slash forms so
+    # the publish-before-pin guard and Docker build consume the same mirror.
+    PYPI_URL_ARG="${PYPI_URL_ARG%/}"
+    if [[ "$PYPI_URL_ARG" != */simple ]]; then
+        PYPI_URL_ARG="${PYPI_URL_ARG}/simple/"
+    else
+        PYPI_URL_ARG="${PYPI_URL_ARG}/"
     fi
     PYPI_HOST_ARG="$(URL_TO_PARSE="${PYPI_URL_ARG}" python3 -c "import os; from urllib.parse import urlsplit; print(urlsplit(os.environ['URL_TO_PARSE']).hostname or '')")"
     PYPI_URL_HAS_USERINFO=false

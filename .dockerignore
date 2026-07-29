@@ -20,6 +20,7 @@ __pycache__
 *.db
 *.log
 .venv
+.venv*/
 node_modules
 tests/
 private/

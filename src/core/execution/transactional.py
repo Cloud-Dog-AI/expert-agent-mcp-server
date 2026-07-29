@@ -142,9 +142,7 @@ class TransactionalExecutor:
                 """Replace one embedded interpolation token, preserving unknown tokens."""
                 try:
                     return TransactionalExecutor._stringify_interpolation_value(
-                        TransactionalExecutor._lookup_interpolation_path(
-                            variables, match.group(1)
-                        )
+                        TransactionalExecutor._lookup_interpolation_path(variables, match.group(1))
                     )
                 except (KeyError, IndexError, TypeError, ValueError):
                     return match.group(0)
@@ -201,11 +199,18 @@ class TransactionalExecutor:
         return str(tool_name).strip().lower() in cls._GROUNDING_TOOLS
 
     @staticmethod
-    def _brief_type_from_request(input_text: str, parameters: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    def _brief_type_from_request(
+        input_text: str, parameters: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
         params = parameters or {}
         for key in ("type", "brief_type", "intel_type", "collection_type"):
             value = params.get(key)
-            if isinstance(value, str) and value.strip().lower() in {"military", "financial", "political", "uk"}:
+            if isinstance(value, str) and value.strip().lower() in {
+                "military",
+                "financial",
+                "political",
+                "uk",
+            }:
                 return value.strip().lower()
         lowered = str(input_text or "").lower()
         for value in ("military", "financial", "political", "uk"):
@@ -355,7 +360,9 @@ class TransactionalExecutor:
         for key in ("profile", "collection", "channel"):
             if arguments.get(key) not in (None, ""):
                 record[key] = arguments[key]
-        record.update({k: v for k, v in cls._extract_invocation_summary(result).items() if k not in record})
+        record.update(
+            {k: v for k, v in cls._extract_invocation_summary(result).items() if k not in record}
+        )
         return record
 
     @classmethod
@@ -737,11 +744,40 @@ class TransactionalExecutor:
             except Exception:
                 llm_params = {}
 
+        raw_timeout = (
+            params.get("timeout")
+            if params.get("timeout") is not None
+            else params.get("llm_timeout")
+            if params.get("llm_timeout") is not None
+            else llm_params.get("timeout")
+            if llm_params.get("timeout") is not None
+            else llm_params.get("llm_timeout")
+        )
+        configured_timeout = self._coerce_int(get_config("llm.timeout"), 300)
+        eff_timeout = self._coerce_int(
+            raw_timeout,
+            configured_timeout,
+        )
+        if eff_timeout <= 0:
+            eff_timeout = configured_timeout
+        if is_agent_run and raw_timeout is None:
+            agent_wall_seconds = self._coerce_int(
+                params.get("max_wall_time_seconds"),
+                self._coerce_int(get_config("agent.max_wall_time_seconds"), 600),
+            )
+            agent_llm_timeout = self._coerce_int(
+                get_config("agent.llm_timeout_seconds"),
+                900,
+            )
+            if agent_wall_seconds > eff_timeout and agent_llm_timeout > eff_timeout:
+                eff_timeout = min(agent_wall_seconds, agent_llm_timeout)
+
         await self.llm_manager.initialize(
             provider=expert.llm_provider,
             model=expert.llm_model,
             base_url=llm_params.get("base_url"),
             api_key=llm_params.get("api_key"),
+            timeout=eff_timeout,
         )
 
         # Per-expert LLM config (each agent carries its OWN context window, output
@@ -759,17 +795,35 @@ class TransactionalExecutor:
                     return llm_params.get(k)
             return default
 
-        eff_temperature = self._coerce_float(_llm_opt("temperature", default=get_config("llm.temperature")), 0.7)
-        eff_max_tokens = self._coerce_int(_llm_opt("max_tokens", "num_predict", default=get_config("llm.max_tokens")), 1024)
+        eff_temperature = self._coerce_float(
+            _llm_opt("temperature", default=get_config("llm.temperature")), 0.7
+        )
+        eff_max_tokens = self._coerce_int(
+            _llm_opt("max_tokens", "num_predict", default=get_config("llm.max_tokens")), 1024
+        )
         eff_num_ctx = _llm_opt("num_ctx", default=get_config("llm.num_ctx"))
         eff_think = bool(_llm_opt("think", default=llm_params.get("think") or False))
         llm_extra: Dict[str, Any] = {"num_predict": eff_max_tokens}
+        # Qwen3 defaults to its reasoning path unless the Ollama request
+        # explicitly carries ``think: false``. Preserve the caller/expert
+        # setting in both directions for Ollama: omitting the false value
+        # silently makes long, model-authored document jobs spend most of their
+        # governed wall time in hidden reasoning and risks job cancellation.
+        # Keep provider-specific fields away from providers that do not expose
+        # the Ollama ``think`` option.
+        if str(expert.llm_provider or "").strip().lower() == "ollama":
+            llm_extra["think"] = eff_think
+        elif eff_think:
+            llm_extra["think"] = True
         if eff_num_ctx:
             llm_extra["num_ctx"] = self._coerce_int(eff_num_ctx, 8192)
-        if eff_think:
-            llm_extra["think"] = True
-        self._llm_cfg = {"temperature": eff_temperature, "max_tokens": eff_max_tokens,
-                         "num_ctx": llm_extra.get("num_ctx"), "think": eff_think}
+        self._llm_cfg = {
+            "temperature": eff_temperature,
+            "max_tokens": eff_max_tokens,
+            "num_ctx": llm_extra.get("num_ctx"),
+            "think": eff_think,
+            "timeout": eff_timeout,
+        }
 
         messages = []
         if prompt:
@@ -813,8 +867,8 @@ class TransactionalExecutor:
             if max_wall_seconds <= 0:
                 raise ValueError("max_wall_time_seconds must be positive")
             try:
-                response = await asyncio.wait_for(
-                    run_agent_strategy(
+                async with asyncio.timeout(max_wall_seconds) as wall_timeout:
+                    response = await run_agent_strategy(
                         strategy=agent_strategy,
                         db=self._get_db(),
                         executor=self,
@@ -824,20 +878,28 @@ class TransactionalExecutor:
                         params=params,
                         auth_context=auth_context,
                         llm_cfg=self._llm_cfg,
-                    ),
-                    timeout=max_wall_seconds,
-                )
-            except asyncio.TimeoutError as exc:
+                    )
+            except TimeoutError as exc:
+                if not wall_timeout.expired():
+                    raise
                 raise TimeoutError(
                     f"Agent strategy exceeded governed wall time of {max_wall_seconds} seconds"
                 ) from exc
         else:
-            response = await self.llm_manager.generate(
-                messages=messages,
-                temperature=eff_temperature,
-                max_tokens=eff_max_tokens,
-                **{k: v for k, v in llm_extra.items() if k != "num_predict"},
-            )
+            try:
+                response = await asyncio.wait_for(
+                    self.llm_manager.generate(
+                        messages=messages,
+                        temperature=eff_temperature,
+                        max_tokens=eff_max_tokens,
+                        **{k: v for k, v in llm_extra.items() if k != "num_predict"},
+                    ),
+                    timeout=eff_timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"LLM generation exceeded governed timeout of {eff_timeout} seconds"
+                ) from exc
         if response.get("services_invoked"):
             services_invoked.extend(response.get("services_invoked") or [])
 

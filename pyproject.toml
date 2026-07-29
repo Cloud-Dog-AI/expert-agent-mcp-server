@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "expert-agent-mcp-server"
-version = "0.1.1RC1"
+version = "0.1.1RC84"
 description = "Expert Agent MCP Server backend services."
 requires-python = ">=3.13,<3.14"
 license = { text = "Apache-2.0" }
@@ -14,15 +14,15 @@ authors = [
 dependencies = [
     # Platform packages
     # W28P-2406A: exact pins are mirror-proven before use.
-    "cloud-dog-config==0.3.4",
+    "cloud-dog-config==0.3.6",
     "cloud-dog-logging==0.4.1",
     "cloud-dog-api-kit==0.14.1",
     "cloud-dog-idam==0.5.4",
     "cloud-dog-llm==0.4.4",
     "cloud-dog-db==0.3.3",
     "cloud-dog-jobs==0.4.4",
-    "cloud-dog-vdb==0.5.5",
-    "cloud-dog-cache==0.2.1",
+    "cloud-dog-vdb==0.5.8",
+    "cloud-dog-cache==0.2.3",
     "cloud-dog-storage==0.1.8",
     "cloud-dog-agent==0.3.2",  # W28B-319 D5: optional prompt-engineering store delegation (lazy import)
 
@@ -64,6 +64,11 @@ dependencies = [
     "python-dotenv>=0.19.0",
     "requests>=2.25.0",
     "httpx>=0.23.0",
+    # Document-pipeline visuals are part of the packaged runtime, not merely
+    # requirements.txt tooling: the local renderer and map clipping are used by
+    # the strategy's inline-delivery path.
+    "shapely>=2.0.0",
+    "matplotlib>=3.6.0",
 ]
 
 [project.optional-dependencies]
